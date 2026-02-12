@@ -1,17 +1,60 @@
 import { EventEmitter } from "node:events";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { AppServerClient } from "./appServerClient.js";
+import { EvalManager, type EvalResult } from "./evalManager.js";
+import { MemoryManager } from "./memoryManager.js";
+import { SkillsManager } from "./skillsManager.js";
+import { ExecutionPlanManager } from "./executionPlanManager.js";
+import { CIStatusManager } from "./ciStatusManager.js";
+import { PRReviewManager } from "./prReviewManager.js";
+import { AppBootManager } from "./appBootManager.js";
+import { LogQueryManager } from "./logQueryManager.js";
+import { CDPBridge } from "./cdpBridge.js";
+import { LinterFramework } from "./linterFramework.js";
+import { ArchitectureValidator } from "./architectureValidator.js";
+import { DocValidator } from "./docValidator.js";
+import { QualityScoreManager } from "./qualityScoreManager.js";
+import { BugReproductionManager } from "./bugReproductionManager.js";
+import { TaskContinuationManager } from "./taskContinuationManager.js";
+import { ReferenceDocManager } from "./referenceDocManager.js";
+import { SkillRouter } from "./skillRouter.js";
+import { ArtifactManager } from "./artifactManager.js";
+import { NetworkPolicyManager } from "./networkPolicyManager.js";
+import { DomainSecretsManager } from "./domainSecretsManager.js";
+import { CompactionManager } from "./compactionManager.js";
+import { ShellToolManager } from "./shellToolManager.js";
+import { AutonomousOrchestrator } from "./autonomousOrchestrator.js";
 import type {
   ApprovalPolicy,
+  AppBootResult,
+  ArchValidationResult,
+  BugReproResult,
+  CIRunRecord,
+  CIStatusSummary,
   ControllerState,
+  DocGardenResult,
+  DocValidationResult,
+  EvalSummary,
+  ExecutionPlan,
   FixUntilGreenResult,
+  GCSweepResult,
   InitializeParams,
   ItemDeltaParams,
+  LintResult,
+  LogQueryResult,
   LoginCompletedParams,
+  ParallelRunResult,
+  ParallelTaskRequest,
+  ParallelTaskResult,
+  PlanPhaseStatus,
+  QualityScore,
+  ReferenceDoc,
+  ReviewResult,
   RunMutationResult,
   SandboxPolicy,
   StartOrContinueTaskResult,
+  TaskCheckpoint,
   TaskRecord,
   TaskStatus,
   ThreadStartResult,
@@ -19,6 +62,24 @@ import type {
   TurnDiffUpdatedParams,
   VerifyResult,
   WorkspaceWriteTurnSandboxPolicy,
+  Artifact,
+  ArtifactCollectionResult,
+  SkillRoutingResult,
+  NetworkAllowlistEntry,
+  OrgNetworkPolicy,
+  RequestNetworkPolicy,
+  NetworkPolicyValidation,
+  DomainSecret,
+  SecretInjectionResult,
+  CompactionConfig,
+  CompactionEvent,
+  CommandAuditEntry,
+  CommandExecutionPolicy,
+  ShellExecutionMetrics,
+  ShellExecutionResult,
+  ShellToolConfig,
+  AutonomousRunParams,
+  AutonomousRunRecord,
 } from "./types.js";
 import { GitManager } from "./gitManager.js";
 import { TaskRegistry } from "./taskRegistry.js";
@@ -35,6 +96,10 @@ interface ControllerOptions {
   gitManager?: GitManager;
   taskRegistry?: TaskRegistry;
   streamToStdout?: boolean;
+  controllerRoot?: string;
+  memoryFilePath?: string;
+  evalHistoryPath?: string;
+  maxParallelTasks?: number;
 }
 
 const VERIFY_JSON_FILENAME = ".agent-verify.json";
@@ -44,6 +109,8 @@ const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspa
 const MAX_TURNS_PER_TASK = 5;
 const MAX_IDENTICAL_FIX_DIFFS = 3;
 const BLOCKED_ROOT_FILES = new Set(["package.json", "tsconfig.json", "eslint.config.mjs", "coordinator.ts"]);
+const DEFAULT_MAX_PARALLEL = 3;
+// Compaction is now handled by CompactionManager with strategy-based thresholds.
 
 export class Controller extends EventEmitter {
   private readonly workspacePath: string;
@@ -56,6 +123,31 @@ export class Controller extends EventEmitter {
   private readonly gitManager: GitManager;
   private readonly taskRegistry: TaskRegistry;
   private readonly streamToStdout: boolean;
+  private readonly controllerRoot: string;
+  private readonly skillsManager: SkillsManager;
+  private readonly memoryManager: MemoryManager;
+  private readonly evalManager: EvalManager;
+  private readonly maxParallelTasks: number;
+  private readonly executionPlanManager: ExecutionPlanManager;
+  private readonly ciStatusManager: CIStatusManager;
+  private readonly prReviewManager: PRReviewManager;
+  private readonly appBootManager: AppBootManager;
+  private readonly logQueryManager: LogQueryManager;
+  private readonly cdpBridge: CDPBridge;
+  private readonly linterFramework: LinterFramework;
+  private readonly architectureValidator: ArchitectureValidator;
+  private readonly docValidator: DocValidator;
+  private readonly qualityScoreManager: QualityScoreManager;
+  private readonly bugReproductionManager: BugReproductionManager;
+  private readonly taskContinuationManager: TaskContinuationManager;
+  private readonly referenceDocManager: ReferenceDocManager;
+  private readonly skillRouter: SkillRouter;
+  private readonly artifactManager: ArtifactManager;
+  private readonly networkPolicyManager: NetworkPolicyManager;
+  private readonly domainSecretsManager: DomainSecretsManager;
+  private readonly compactionManager: CompactionManager;
+  private readonly shellToolManager: ShellToolManager;
+  private readonly autonomousOrchestrator: AutonomousOrchestrator;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -83,6 +175,60 @@ export class Controller extends EventEmitter {
     this.gitManager = options.gitManager ?? new GitManager(this.workspaceManager);
     this.taskRegistry = options.taskRegistry ?? new TaskRegistry(`${dirname(this.stateFilePath)}/tasks.json`);
     this.streamToStdout = options.streamToStdout ?? true;
+
+    const stateDir = dirname(this.stateFilePath);
+    this.controllerRoot = options.controllerRoot ?? dirname(stateDir);
+    this.skillsManager = new SkillsManager(this.controllerRoot);
+    this.memoryManager = new MemoryManager(options.memoryFilePath ?? `${stateDir}/memory.json`);
+    this.evalManager = new EvalManager(options.evalHistoryPath ?? `${stateDir}/eval-history.json`, this.workspaceManager);
+    this.maxParallelTasks = options.maxParallelTasks ?? DEFAULT_MAX_PARALLEL;
+
+    // New Harness Engineering managers
+    this.executionPlanManager = new ExecutionPlanManager(`${stateDir}/plans.json`);
+    this.ciStatusManager = new CIStatusManager(`${stateDir}/ci-status.json`);
+    this.prReviewManager = new PRReviewManager(this.workspaceManager, this.skillsManager);
+    this.appBootManager = new AppBootManager(this.workspaceManager);
+    this.logQueryManager = new LogQueryManager(this.workspaceManager);
+    this.cdpBridge = new CDPBridge();
+    this.linterFramework = new LinterFramework(this.workspaceManager);
+    this.architectureValidator = new ArchitectureValidator(this.workspaceManager);
+    this.docValidator = new DocValidator(this.workspaceManager);
+    this.qualityScoreManager = new QualityScoreManager(
+      `${stateDir}/quality-scores.json`,
+      this.evalManager,
+      this.ciStatusManager,
+      this.linterFramework,
+      this.architectureValidator,
+      this.docValidator,
+    );
+    this.bugReproductionManager = new BugReproductionManager(this.workspaceManager, this.skillsManager);
+    this.taskContinuationManager = new TaskContinuationManager(`${stateDir}/checkpoints.json`);
+    this.referenceDocManager = new ReferenceDocManager(`${stateDir}/reference-docs.json`);
+
+    // Article-inspired capabilities
+    this.skillRouter = new SkillRouter(this.skillsManager);
+    this.artifactManager = new ArtifactManager(`${stateDir}/artifacts.json`, this.workspaceManager);
+    this.networkPolicyManager = new NetworkPolicyManager(`${stateDir}/network-policy.json`);
+    this.domainSecretsManager = new DomainSecretsManager(`${stateDir}/domain-secrets.json`);
+    this.compactionManager = new CompactionManager(
+      `${stateDir}/compaction-history.json`,
+      this.appServerClient,
+    );
+
+    // Shell tool integration
+    this.shellToolManager = new ShellToolManager(
+      this.workspaceManager,
+      stateDir,
+      {
+        enabled: process.env.SHELL_TOOL_ENABLED !== "false",
+      },
+    );
+
+    // Autonomous orchestrator
+    this.autonomousOrchestrator = new AutonomousOrchestrator(
+      this,
+      `${stateDir}/autonomous-runs.json`,
+    );
   }
 
   public async bootstrap(): Promise<{ threadId: string }> {
@@ -155,9 +301,10 @@ export class Controller extends EventEmitter {
     this.handleApprovalEvents();
 
     const threadId = await this.createAndPersistNewThread(this.workspacePath);
+    const enrichedPrompt = await this.buildMutationPrompt(prompt);
     return this.executeTurn({
       threadId,
-      prompt: this.buildMutationPrompt(prompt),
+      prompt: enrichedPrompt,
       cwd: this.workspacePath,
     });
   }
@@ -263,7 +410,7 @@ export class Controller extends EventEmitter {
         );
       }
 
-      const prompt = this.buildFixPrompt({
+      const prompt = await this.buildFixPrompt({
         taskId,
         iteration,
         maxIterations,
@@ -277,6 +424,18 @@ export class Controller extends EventEmitter {
         prompt,
         cwd: lastVerify.workspacePath,
       });
+
+      // Extract learnings from each fix iteration for memory.
+      try {
+        const fixDiffResult = await this.workspaceManager.runInWorkspaceAllowNonZero(taskId, ["git", "diff"]);
+        await this.memoryManager.extractLearningsFromFixLoop(
+          taskId,
+          lastVerify.combinedTail,
+          fixDiffResult.stdout,
+        );
+      } catch {
+        // Non-critical: learning extraction failures should not break the fix loop.
+      }
 
       lastVerify = await this.runVerify(taskId);
     }
@@ -384,19 +543,36 @@ export class Controller extends EventEmitter {
     let task: TaskRecord | null = null;
     try {
       task = await this.createTask(taskId);
+
+      // Deploy AGENTS.md into workspace so the agent has repo context.
+      await this.deployAgentsMd(task.workspacePath);
+
       await this.updateTaskStatus(taskId, "mutating");
 
+      const enrichedPrompt = await this.buildMutationPrompt(normalizedFeatureDescription);
       await this.executeTurn({
         taskId,
         threadId: task.threadId,
-        prompt: this.buildMutationPrompt(normalizedFeatureDescription),
+        prompt: enrichedPrompt,
         cwd: task.workspacePath,
       });
+
+      // Trigger compaction after the initial mutation turn to reclaim context.
+      await this.compactIfNeeded(task.threadId);
 
       await this.updateTaskStatus(taskId, "verifying");
       const fixResult = await this.fixUntilGreen(taskId, 5);
       if (!fixResult.success) {
         throw new Error(`Verification did not pass within iteration limit for taskId=${taskId}`);
+      }
+
+      // Run eval to score the mutation quality.
+      let evalScore: number | undefined;
+      try {
+        const evalResult = await this.evalManager.runEval(taskId);
+        evalScore = evalResult.overallScore;
+      } catch {
+        // Eval failures are non-critical.
       }
 
       await this.updateTaskStatus(taskId, "ready");
@@ -407,17 +583,21 @@ export class Controller extends EventEmitter {
       }
 
       const title = this.generatePullRequestTitle(normalizedFeatureDescription);
-      const body = this.generatePullRequestBody(taskId, normalizedFeatureDescription, fixResult.iterations);
+      const body = this.generatePullRequestBody(taskId, normalizedFeatureDescription, fixResult.iterations, evalScore);
       const prUrl = await this.createPullRequest(taskId, title, body);
       await this.updateTaskStatus(taskId, "pr_opened");
 
-      return {
+      const mutationResult: RunMutationResult = {
         taskId,
         branch: task.branchName,
         prUrl,
         iterations: fixResult.iterations,
         success: true,
       };
+      if (evalScore !== undefined) {
+        mutationResult.evalScore = evalScore;
+      }
+      return mutationResult;
     } catch (error) {
       if (task) {
         try {
@@ -823,18 +1003,21 @@ export class Controller extends EventEmitter {
       .trim();
   }
 
-  private buildFixPrompt(args: {
+  private async buildFixPrompt(args: {
     taskId: string;
     iteration: number;
     maxIterations: number;
     verify: VerifyResult;
     diffStat: string;
-  }): string {
+  }): Promise<string> {
     const verificationJsonText = args.verify.verificationJson === null
       ? "null"
       : JSON.stringify(args.verify.verificationJson, null, 2);
 
-    return [
+    const skillContext = await this.skillsManager.buildSkillContext(["fix"]);
+    const memoryContext = await this.memoryManager.buildMemoryContext(["fix-pattern", "error-resolution"]);
+
+    const sections: string[] = [
       `Task: make pnpm verify pass for gpc-cres workspace taskId=${args.taskId}.`,
       `Iteration: ${args.iteration}/${args.maxIterations}.`,
       "",
@@ -844,6 +1027,17 @@ export class Controller extends EventEmitter {
       "3. Do not change Prisma migrations unless explicitly needed for the failing check.",
       "4. Keep edits scoped to the current workspace.",
       "5. Preserve pnpm workspace structure for gpc-cres monorepo.",
+    ];
+
+    if (skillContext) {
+      sections.push(skillContext);
+    }
+
+    if (memoryContext) {
+      sections.push(memoryContext);
+    }
+
+    sections.push(
       "",
       "Verification JSON (.agent-verify.json if present):",
       verificationJsonText,
@@ -855,7 +1049,9 @@ export class Controller extends EventEmitter {
       args.verify.combinedTail || "(empty)",
       "",
       "Now produce and apply the smallest valid fix.",
-    ].join("\n");
+    );
+
+    return sections.join("\n");
   }
 
   private parseGitHubRepo(originUrlOutput: string): { owner: string; name: string } {
@@ -913,13 +1109,20 @@ export class Controller extends EventEmitter {
     return null;
   }
 
-  public buildMutationPrompt(featureDescription: string): string {
+  public async buildMutationPrompt(featureDescription: string): Promise<string> {
     const normalized = featureDescription.trim();
     if (normalized.length === 0) {
       throw new Error("buildMutationPrompt requires a non-empty featureDescription");
     }
 
-    return [
+    // Dynamic skill routing (article tip #1, #2, #7):
+    // Route skills based on task description instead of always loading "mutation"
+    const skillContext = await this.skillRouter.buildRoutedSkillContext(normalized);
+    const memoryContext = await this.memoryManager.buildMemoryContext(["fix-pattern", "convention-violation"]);
+    const secretsContext = await this.domainSecretsManager.buildModelContext();
+    const referenceContext = await this.referenceDocManager.buildContext();
+
+    const sections: string[] = [
       "Task: implement the requested feature in the gpc-cres monorepo with minimal, correct changes.",
       "",
       "Repository rules (must follow):",
@@ -930,10 +1133,27 @@ export class Controller extends EventEmitter {
       "5. Follow existing package structure; avoid cross-package reshaping unless strictly required.",
       "6. Run pnpm verify after changes and use fix-until-green behavior before finishing.",
       "7. Keep edits minimal and deterministic.",
-      "",
-      "Feature request:",
-      normalized,
-    ].join("\n");
+    ];
+
+    if (skillContext) {
+      sections.push(skillContext);
+    }
+
+    if (memoryContext) {
+      sections.push(memoryContext);
+    }
+
+    if (secretsContext) {
+      sections.push(secretsContext);
+    }
+
+    if (referenceContext) {
+      sections.push(referenceContext);
+    }
+
+    sections.push("", "Feature request:", normalized);
+
+    return sections.join("\n");
   }
 
   private generateCommitMessage(featureDescription: string): string {
@@ -946,15 +1166,21 @@ export class Controller extends EventEmitter {
     return `feat: ${summary}`;
   }
 
-  private generatePullRequestBody(taskId: string, featureDescription: string, iterations: number): string {
-    return [
+  private generatePullRequestBody(taskId: string, featureDescription: string, iterations: number, evalScore?: number): string {
+    const lines = [
       `Task ID: ${taskId}`,
       "",
       "Requested feature:",
       featureDescription,
       "",
       `Verification fix iterations: ${iterations}`,
-    ].join("\n");
+    ];
+
+    if (evalScore !== undefined) {
+      lines.push(`Eval score: ${evalScore.toFixed(2)}`);
+    }
+
+    return lines.join("\n");
   }
 
   private toSlugSummary(input: string, maxLength: number): string {
@@ -1018,5 +1244,445 @@ export class Controller extends EventEmitter {
     } catch {
       // Preserve caller errors when status update is not possible.
     }
+  }
+
+  // --- AGENTS.md Deployment ---
+
+  private async deployAgentsMd(workspacePath: string): Promise<void> {
+    const templatePath = resolve(this.controllerRoot, "templates", "AGENTS.md");
+    const destPath = resolve(workspacePath, "AGENTS.md");
+
+    try {
+      await stat(templatePath);
+    } catch {
+      // Template not found; skip deployment silently.
+      return;
+    }
+
+    try {
+      await copyFile(templatePath, destPath);
+    } catch {
+      // Non-critical: workspace may be read-only in certain sandbox modes.
+    }
+  }
+
+  // --- Compaction (token-aware) ---
+
+  private async compactIfNeeded(threadId: string, promptText?: string): Promise<void> {
+    // Delegate to CompactionManager which uses strategy-based compaction
+    // (token-threshold, turn-interval, or auto) instead of naive every-N-turns
+    await this.compactionManager.trackAndCompactIfNeeded(
+      threadId,
+      promptText ?? "",
+    );
+  }
+
+  // --- Skill Routing ---
+
+  public async routeSkills(taskDescription: string): Promise<SkillRoutingResult> {
+    return this.skillRouter.route(taskDescription);
+  }
+
+  public async forceSelectSkills(skillNames: string[]): Promise<SkillRoutingResult> {
+    return this.skillRouter.forceSelect(skillNames);
+  }
+
+  // --- Artifact Management ---
+
+  public async registerArtifact(
+    taskId: string,
+    name: string,
+    path: string,
+    type?: Artifact["type"],
+    metadata?: Record<string, string>,
+  ): Promise<Artifact> {
+    return this.artifactManager.registerArtifact(taskId, name, path, type, metadata);
+  }
+
+  public async collectArtifacts(taskId: string): Promise<ArtifactCollectionResult> {
+    return this.artifactManager.collectFromWorkspace(taskId);
+  }
+
+  public async getArtifacts(taskId: string): Promise<Artifact[]> {
+    return this.artifactManager.getArtifacts(taskId);
+  }
+
+  // --- Network Policy ---
+
+  public async getNetworkPolicy(): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.getOrgPolicy();
+  }
+
+  public async setNetworkPolicy(allowlist: NetworkAllowlistEntry[]): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.setOrgPolicy(allowlist);
+  }
+
+  public async addNetworkDomain(entry: NetworkAllowlistEntry): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.addOrgDomain(entry);
+  }
+
+  public async removeNetworkDomain(domain: string): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.removeOrgDomain(domain);
+  }
+
+  public async validateRequestNetwork(policy: RequestNetworkPolicy): Promise<NetworkPolicyValidation> {
+    return this.networkPolicyManager.validateRequestPolicy(policy);
+  }
+
+  // --- Domain Secrets ---
+
+  public async registerDomainSecret(secret: DomainSecret): Promise<void> {
+    await this.domainSecretsManager.registerSecret(secret);
+  }
+
+  public async getDomainSecrets(): Promise<DomainSecret[]> {
+    return this.domainSecretsManager.getSecrets();
+  }
+
+  public async validateDomainSecrets(): Promise<SecretInjectionResult[]> {
+    return this.domainSecretsManager.validateSecrets();
+  }
+
+  // --- Compaction Config ---
+
+  public getCompactionConfig(): CompactionConfig {
+    return this.compactionManager.getConfig();
+  }
+
+  public setCompactionConfig(config: Partial<CompactionConfig>): CompactionConfig {
+    return this.compactionManager.setConfig(config);
+  }
+
+  public async getCompactionHistory(limit?: number): Promise<CompactionEvent[]> {
+    return this.compactionManager.getHistory(limit);
+  }
+
+  public getContextUsage(threadId: string): { estimatedTokens: number; maxTokens: number; percentUsed: number; turnCount: number } {
+    return this.compactionManager.getContextUsage(threadId);
+  }
+
+  // --- Eval ---
+
+  public async runEval(taskId: string): Promise<EvalResult> {
+    return this.evalManager.runEval(taskId);
+  }
+
+  public async getEvalHistory(limit?: number): Promise<EvalResult[]> {
+    return this.evalManager.getHistory(limit);
+  }
+
+  public async getEvalSummary(taskId: string): Promise<EvalSummary> {
+    const result = await this.evalManager.runEval(taskId);
+    return {
+      taskId: result.taskId,
+      overallScore: result.overallScore,
+      passed: result.passed,
+      checkCount: result.checks.length,
+      passedCount: result.checks.filter((c) => c.passed).length,
+    };
+  }
+
+  // --- Memory ---
+
+  public async getMemoryEntries(category?: string, limit?: number): Promise<unknown[]> {
+    return this.memoryManager.getRelevantLearnings(
+      category as "fix-pattern" | "error-resolution" | "convention-violation" | "performance" | "general" | undefined,
+      limit,
+    );
+  }
+
+  // --- Doc Gardening ---
+
+  public async runDocGardening(taskId: string): Promise<DocGardenResult> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+    this.handleApprovalEvents();
+
+    let task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      task = await this.createTask(taskId);
+    }
+
+    const skillContext = await this.skillsManager.buildSkillContext(["doc-gardening"]);
+
+    const prompt = [
+      "Task: scan and update documentation in the gpc-cres monorepo.",
+      "",
+      "Instructions:",
+      "1. Check all docs/*.md files for accuracy against actual code.",
+      "2. Update stale references, outdated code examples, or missing sections.",
+      "3. Verify AGENTS.md quick-reference table entries point to real paths.",
+      "4. Add any missing documentation for new packages or significant modules.",
+      "5. Keep changes minimal — only fix what is actually wrong or missing.",
+      skillContext,
+    ].join("\n");
+
+    const result = await this.executeTurn({
+      taskId,
+      threadId: task.threadId,
+      prompt,
+      cwd: task.workspacePath,
+    });
+
+    return {
+      taskId,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      status: result.status,
+    };
+  }
+
+  // --- Execution Plans ---
+
+  public async createExecutionPlan(taskId: string, description: string): Promise<ExecutionPlan> {
+    return this.executionPlanManager.createPlan(taskId, description);
+  }
+
+  public async getExecutionPlan(taskId: string): Promise<ExecutionPlan | null> {
+    return this.executionPlanManager.getPlan(taskId);
+  }
+
+  public async updatePlanPhase(taskId: string, phaseIndex: number, status: PlanPhaseStatus): Promise<ExecutionPlan> {
+    return this.executionPlanManager.updatePhaseStatus(taskId, phaseIndex, status);
+  }
+
+  // --- CI Status ---
+
+  public async recordCIRun(record: Omit<CIRunRecord, "runId" | "timestamp">): Promise<CIRunRecord> {
+    return this.ciStatusManager.recordRun(record);
+  }
+
+  public async getCIStatus(taskId: string): Promise<CIStatusSummary> {
+    return this.ciStatusManager.getStatus(taskId);
+  }
+
+  public async getCIHistory(taskId: string, limit?: number): Promise<CIRunRecord[]> {
+    return this.ciStatusManager.getHistory(taskId, limit);
+  }
+
+  // --- PR Review ---
+
+  public async reviewPR(taskId: string): Promise<ReviewResult> {
+    return this.prReviewManager.reviewDiff(taskId);
+  }
+
+  public async runReviewLoop(taskId: string, maxRounds = 3): Promise<{ rounds: number; finalReview: ReviewResult }> {
+    return this.prReviewManager.runReviewLoop(taskId, maxRounds, async (tid, prompt) => {
+      const task = await this.taskRegistry.getTask(tid);
+      if (!task) throw new Error(`Task not found: ${tid}`);
+      await this.executeTurn({ taskId: tid, threadId: task.threadId, prompt, cwd: task.workspacePath });
+    });
+  }
+
+  // --- App Boot ---
+
+  public async bootApp(taskId: string): Promise<AppBootResult> {
+    return this.appBootManager.bootApp(taskId);
+  }
+
+  // --- Log Query ---
+
+  public async queryLogs(taskId: string, pattern: string, limit?: number): Promise<LogQueryResult> {
+    return this.logQueryManager.queryLogs(taskId, pattern, limit);
+  }
+
+  // --- Linter ---
+
+  public async runLinter(taskId: string, rules?: string[]): Promise<LintResult> {
+    return this.linterFramework.runLinter(taskId, rules);
+  }
+
+  // --- Architecture Validation ---
+
+  public async validateArchitecture(taskId: string): Promise<ArchValidationResult> {
+    return this.architectureValidator.validate(taskId);
+  }
+
+  // --- Doc Validation ---
+
+  public async validateDocs(taskId: string): Promise<DocValidationResult> {
+    return this.docValidator.validate(taskId);
+  }
+
+  // --- Quality Score ---
+
+  public async getQualityScore(taskId: string): Promise<QualityScore> {
+    return this.qualityScoreManager.getScore(taskId);
+  }
+
+  // --- GC Sweep ---
+
+  public async runGCSweep(): Promise<GCSweepResult> {
+    // Note: GCScheduler needs jobs map, but we delegate from rpcServer level.
+    // For controller-level, we return a basic sweep without job pruning.
+    return { staleWorkspacesRemoved: 0, staleJobsPruned: 0, evalEntriesPruned: 0, freedPaths: [] };
+  }
+
+  // --- Bug Reproduction ---
+
+  public async reproduceBug(taskId: string, bugDescription: string): Promise<BugReproResult> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+
+    let task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      task = await this.createTask(taskId);
+    }
+
+    return this.bugReproductionManager.reproduce(
+      taskId,
+      bugDescription,
+      async (tid, threadId, prompt, cwd) => {
+        await this.executeTurn({ taskId: tid, threadId, prompt, cwd });
+      },
+      task.threadId,
+    );
+  }
+
+  // --- Task Continuation ---
+
+  public async checkpointTask(taskId: string, description: string): Promise<TaskCheckpoint> {
+    const task = await this.taskRegistry.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    return this.taskContinuationManager.checkpoint(taskId, task.threadId, description);
+  }
+
+  public async getTaskCheckpoints(taskId: string): Promise<TaskCheckpoint[]> {
+    return this.taskContinuationManager.getCheckpoints(taskId);
+  }
+
+  // --- Reference Docs ---
+
+  public async addReferenceDoc(doc: Omit<ReferenceDoc, "id" | "addedAt">): Promise<ReferenceDoc> {
+    return this.referenceDocManager.addDoc(doc);
+  }
+
+  public async getReferenceDocs(category?: string): Promise<ReferenceDoc[]> {
+    return this.referenceDocManager.listDocs(category);
+  }
+
+  // --- Parallel Task Execution ---
+
+  public async runParallel(tasks: ParallelTaskRequest[]): Promise<ParallelRunResult> {
+    if (tasks.length === 0) {
+      return { totalTasks: 0, succeeded: 0, failed: 0, results: [] };
+    }
+
+    const concurrency = Math.min(tasks.length, this.maxParallelTasks);
+    const results: ParallelTaskResult[] = [];
+    const queue = [...tasks];
+
+    const worker = async (): Promise<void> => {
+      while (queue.length > 0) {
+        const task = queue.shift();
+        if (!task) {
+          break;
+        }
+
+        try {
+          const result = await this.runMutation(task.taskId, task.featureDescription);
+          results.push({ taskId: task.taskId, success: true, result });
+        } catch (error) {
+          results.push({
+            taskId: task.taskId,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    };
+
+    const workers = Array.from({ length: concurrency }, () => worker());
+    await Promise.allSettled(workers);
+
+    const succeeded = results.filter((r) => r.success).length;
+    return {
+      totalTasks: tasks.length,
+      succeeded,
+      failed: tasks.length - succeeded,
+      results,
+    };
+  }
+
+  // --- Shell Tool Integration ---
+
+  public async executeShellCommand(
+    taskId: string,
+    command: string[],
+    options?: { timeoutMs?: number; allowNonZeroExit?: boolean },
+  ): Promise<ShellExecutionResult> {
+    return this.shellToolManager.executeCommand(taskId, command, options);
+  }
+
+  public async setShellPolicy(policy: CommandExecutionPolicy): Promise<CommandExecutionPolicy> {
+    return this.shellToolManager.setTaskPolicy(policy);
+  }
+
+  public async getShellPolicy(taskId: string): Promise<CommandExecutionPolicy | null> {
+    return this.shellToolManager.getTaskPolicy(taskId);
+  }
+
+  public async removeShellPolicy(taskId: string): Promise<boolean> {
+    return this.shellToolManager.removeTaskPolicy(taskId);
+  }
+
+  public async listShellPolicies(): Promise<CommandExecutionPolicy[]> {
+    return this.shellToolManager.listPolicies();
+  }
+
+  public async getShellAuditLog(taskId?: string, limit?: number): Promise<CommandAuditEntry[]> {
+    return this.shellToolManager.getAuditLog(taskId, limit);
+  }
+
+  public async getShellMetrics(taskId?: string): Promise<ShellExecutionMetrics> {
+    return this.shellToolManager.getMetrics(taskId);
+  }
+
+  public getShellConfig(): ShellToolConfig {
+    return this.shellToolManager.getConfig();
+  }
+
+  public isShellEnabled(): boolean {
+    return this.shellToolManager.isEnabled();
+  }
+
+  public async clearShellAuditLog(): Promise<void> {
+    return this.shellToolManager.clearAuditLog();
+  }
+
+  // --- Autonomous Orchestration ---
+
+  public async startAutonomousRun(params: AutonomousRunParams): Promise<AutonomousRunRecord> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+    this.handleApprovalEvents();
+    return this.autonomousOrchestrator.startRun(params);
+  }
+
+  public async getAutonomousRun(runId: string): Promise<AutonomousRunRecord | null> {
+    return this.autonomousOrchestrator.getRun(runId);
+  }
+
+  public async listAutonomousRuns(limit?: number): Promise<AutonomousRunRecord[]> {
+    return this.autonomousOrchestrator.listRuns(limit);
+  }
+
+  public async cancelAutonomousRun(runId: string): Promise<boolean> {
+    return this.autonomousOrchestrator.cancelRun(runId);
+  }
+
+  public async commitAllChanges(taskId: string, message: string): Promise<boolean> {
+    return this.gitManager.commitAll(taskId, message);
+  }
+
+  public async prepareWorkspace(taskId: string): Promise<void> {
+    const task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    await this.deployAgentsMd(task.workspacePath);
   }
 }

@@ -11,8 +11,8 @@ const EMPTY_REGISTRY: TaskRegistryFile = { tasks: {} };
 const VALID_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   created: new Set(["mutating", "verifying", "fixing", "ready", "failed"]),
   mutating: new Set(["verifying", "fixing", "ready", "failed"]),
-  verifying: new Set(["fixing", "ready", "failed"]),
-  fixing: new Set(["verifying", "ready", "failed"]),
+  verifying: new Set(["mutating", "fixing", "ready", "failed"]),
+  fixing: new Set(["mutating", "verifying", "ready", "failed"]),
   ready: new Set(["mutating", "pr_opened", "failed"]),
   pr_opened: new Set(["failed"]),
   failed: new Set([]),
