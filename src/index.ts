@@ -150,16 +150,28 @@ async function main(): Promise<void> {
         ...(bearerToken && bearerToken.trim().length > 0 ? { bearerToken } : {}),
       });
 
+      const mcpEndpoint = `http://${bindHost}:${port}/rpc`;
+
       process.stdout.write(
         JSON.stringify({
           ok: true,
           command,
           bindHost,
           port,
+          mcpEndpoint,
           routes: { health: "/healthz", rpc: "/rpc" },
           auth: bearerToken ? "bearer" : "none",
         }) + "\n",
       );
+
+      process.stderr.write(`\n`);
+      process.stderr.write(`  MCP server running.\n`);
+      process.stderr.write(`\n`);
+      process.stderr.write(`  ➜  MCP endpoint: ${mcpEndpoint}\n`);
+      process.stderr.write(`  ➜  Health check: http://${bindHost}:${port}/healthz\n`);
+      process.stderr.write(`\n`);
+      process.stderr.write(`  Add the MCP endpoint URL above to ChatGPT under Settings → MCP / Tools.\n`);
+      process.stderr.write(`\n`);
 
       const stop = async (): Promise<void> => {
         await server.close();
