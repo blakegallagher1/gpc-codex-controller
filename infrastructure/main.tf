@@ -76,3 +76,16 @@ module "hetzner_vm" {
     endpoint_hostname        = local.endpoint_hostname
   })
 }
+
+module "render_service" {
+  count = var.enable_render ? 1 : 0
+
+  source = "./modules/render-service"
+
+  service_name = var.render_service_name
+  repo_url     = var.controller_repo_url
+  repo_branch  = var.controller_repo_branch
+  plan         = var.render_plan
+  region       = var.render_region
+  github_token = var.github_token
+}

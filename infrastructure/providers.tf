@@ -18,6 +18,10 @@ terraform {
       source  = "hashicorp/random"
       version = ">= 3.6.3, < 4.0.0"
     }
+    render = {
+      source  = "render-oss/render"
+      version = ">= 1.7.0, < 2.0.0"
+    }
   }
 }
 
@@ -27,4 +31,9 @@ provider "hcloud" {
 
 provider "cloudflare" {
   api_token = var.cloudflare_api_token
+}
+
+provider "render" {
+  api_key  = var.render_api_key
+  owner_id = var.render_owner_id
 }

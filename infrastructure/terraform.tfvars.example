@@ -41,3 +41,4 @@ render_api_key        = null
 render_owner_id       = null
 render_service_name   = "gpc-codex-controller"
 render_plan           = "starter"
+render_region         = "oregon"

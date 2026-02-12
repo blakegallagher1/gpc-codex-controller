@@ -34,11 +34,11 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "this" {
         hostname = var.hostname
         service  = "http://${var.origin_host}:${var.origin_port}"
         origin_request = {
-          connect_timeout          = 30
-          keep_alive_timeout       = 90
-          keep_alive_connections   = 100
-          http_host_header         = var.hostname
-          no_tls_verify            = true
+          connect_timeout        = 30
+          keep_alive_timeout     = 90
+          keep_alive_connections = 100
+          http_host_header       = var.hostname
+          no_tls_verify          = true
         }
       },
       {
