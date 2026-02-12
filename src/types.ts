@@ -175,3 +175,22 @@ export interface FixUntilGreenResult {
   iterations: number;
   lastVerify: VerifyResult;
 }
+
+export type TaskStatus = "created" | "mutating" | "verifying" | "fixing" | "ready" | "pr_opened" | "failed";
+
+export interface TaskRecord {
+  taskId: string;
+  workspacePath: string;
+  branchName: string;
+  threadId: string;
+  createdAt: string;
+  status: TaskStatus;
+}
+
+export interface RunMutationResult {
+  taskId: string;
+  branch: string;
+  prUrl: string;
+  iterations: number;
+  success: boolean;
+}

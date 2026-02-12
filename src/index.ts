@@ -10,6 +10,12 @@ interface CliOptions {
   serverArgs: string;
   requestTimeoutMs?: string;
   loginTimeoutMs?: string;
+  prompt?: string;
+  threadId?: string;
+  taskId?: string;
+  maxIterations?: string;
+  title?: string;
+  body?: string;
 }
 
 function parsePositiveInteger(value: string | undefined, optionName: string): number | undefined {
@@ -26,7 +32,7 @@ function parsePositiveInteger(value: string | undefined, optionName: string): nu
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     options: {
       workspace: {
         type: "string",
@@ -49,10 +55,35 @@ async function main(): Promise<void> {
       loginTimeoutMs: {
         type: "string",
       },
+      prompt: {
+        type: "string",
+      },
+      threadId: {
+        type: "string",
+      },
+      taskId: {
+        type: "string",
+      },
+      maxIterations: {
+        type: "string",
+      },
+      title: {
+        type: "string",
+      },
+      body: {
+        type: "string",
+      },
     },
+    strict: true,
+    allowPositionals: true,
   });
 
   const cli = values as unknown as CliOptions;
+  const command = positionals[0];
+  if (!command) {
+    throw new Error("Missing command. Use one of: start, continue, verify, fix, pr");
+  }
+
   const workspacePath = resolve(cli.workspace);
   const stateFilePath = resolve(cli.stateFile ?? `${workspacePath}/.gpc-codex-controller/state.json`);
 
@@ -101,8 +132,83 @@ async function main(): Promise<void> {
     void shutdown().finally(() => process.exit(143));
   });
 
-  const { threadId } = await controller.bootstrap();
-  console.log(`Controller ready. threadId=${threadId}`);
+  switch (command) {
+    case "start": {
+      if (!cli.prompt || cli.prompt.trim().length === 0) {
+        throw new Error("start requires --prompt");
+      }
+
+      const result = await controller.startTask(cli.prompt);
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
+    case "continue": {
+      if (!cli.threadId || cli.threadId.trim().length === 0) {
+        throw new Error("continue requires --threadId");
+      }
+      if (!cli.prompt || cli.prompt.trim().length === 0) {
+        throw new Error("continue requires --prompt");
+      }
+
+      const result = await controller.continueTask(cli.threadId, cli.prompt);
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
+    case "verify": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("verify requires --taskId");
+      }
+
+      const result = await controller.runVerify(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: result.taskId,
+          workspacePath: result.workspacePath,
+          success: result.success,
+          exitCode: result.exitCode,
+          failureCount: result.parsedFailures.length,
+        }),
+      );
+      break;
+    }
+    case "fix": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("fix requires --taskId");
+      }
+
+      const maxIterations = parsePositiveInteger(cli.maxIterations, "maxIterations") ?? 5;
+      const result = await controller.fixUntilGreen(cli.taskId, maxIterations);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: result.taskId,
+          success: result.success,
+          iterations: result.iterations,
+          verifyExitCode: result.lastVerify.exitCode,
+        }),
+      );
+      break;
+    }
+    case "pr": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("pr requires --taskId");
+      }
+      if (!cli.title || cli.title.trim().length === 0) {
+        throw new Error("pr requires --title");
+      }
+
+      const prUrl = await controller.createPullRequest(cli.taskId, cli.title, cli.body ?? "");
+      console.log(JSON.stringify({ ok: true, command, taskId: cli.taskId, prUrl }));
+      break;
+    }
+    default:
+      throw new Error(`Unsupported command: ${command}. Use one of: start, continue, verify, fix, pr`);
+  }
+
+  await shutdown();
 }
 
 main().catch((error: unknown) => {

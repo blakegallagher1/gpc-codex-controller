@@ -9,14 +9,19 @@ import type {
   InitializeParams,
   ItemDeltaParams,
   LoginCompletedParams,
+  RunMutationResult,
   SandboxPolicy,
   StartOrContinueTaskResult,
+  TaskRecord,
+  TaskStatus,
   ThreadStartResult,
   TurnCompletedParams,
   TurnDiffUpdatedParams,
   VerifyResult,
   WorkspaceWriteTurnSandboxPolicy,
 } from "./types.js";
+import { GitManager } from "./gitManager.js";
+import { TaskRegistry } from "./taskRegistry.js";
 import { WorkspaceManager } from "./workspaceManager.js";
 
 interface ControllerOptions {
@@ -27,6 +32,8 @@ interface ControllerOptions {
   approvalPolicy?: ApprovalPolicy;
   loginTimeoutMs?: number;
   workspaceManager?: WorkspaceManager;
+  gitManager?: GitManager;
+  taskRegistry?: TaskRegistry;
   streamToStdout?: boolean;
 }
 
@@ -34,6 +41,9 @@ const VERIFY_JSON_FILENAME = ".agent-verify.json";
 const VERIFY_OUTPUT_TAIL_LINES = 120;
 const TURN_TIMEOUT_MS = 20 * 60_000;
 const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspaceWrite" };
+const MAX_TURNS_PER_TASK = 5;
+const MAX_IDENTICAL_FIX_DIFFS = 3;
+const BLOCKED_ROOT_FILES = new Set(["package.json", "tsconfig.json", "eslint.config.mjs", "coordinator.ts"]);
 
 export class Controller extends EventEmitter {
   private readonly workspacePath: string;
@@ -43,6 +53,8 @@ export class Controller extends EventEmitter {
   private readonly approvalPolicy: ApprovalPolicy;
   private readonly loginTimeoutMs: number;
   private readonly workspaceManager: WorkspaceManager;
+  private readonly gitManager: GitManager;
+  private readonly taskRegistry: TaskRegistry;
   private readonly streamToStdout: boolean;
 
   private state: ControllerState = {};
@@ -50,6 +62,7 @@ export class Controller extends EventEmitter {
   private turnEventsBound = false;
   private itemEventsBound = false;
   private approvalEventsBound = false;
+  private readonly turnStartCountByTask = new Map<string, number>();
 
   public constructor(
     private readonly appServerClient: AppServerClient,
@@ -63,6 +76,8 @@ export class Controller extends EventEmitter {
     this.approvalPolicy = options.approvalPolicy ?? "never";
     this.loginTimeoutMs = options.loginTimeoutMs ?? 5 * 60_000;
     this.workspaceManager = options.workspaceManager ?? new WorkspaceManager();
+    this.gitManager = options.gitManager ?? new GitManager(this.workspaceManager);
+    this.taskRegistry = options.taskRegistry ?? new TaskRegistry(`${dirname(this.stateFilePath)}/tasks.json`);
     this.streamToStdout = options.streamToStdout ?? true;
   }
 
@@ -138,7 +153,7 @@ export class Controller extends EventEmitter {
     const threadId = await this.createAndPersistNewThread(this.workspacePath);
     return this.executeTurn({
       threadId,
-      prompt,
+      prompt: this.buildMutationPrompt(prompt),
       cwd: this.workspacePath,
     });
   }
@@ -197,10 +212,21 @@ export class Controller extends EventEmitter {
       throw new Error(`maxIterations must be a positive integer, got: ${maxIterations}`);
     }
 
-    const { threadId } = await this.bootstrap();
+    let activeThreadId: string | undefined;
+    const task = await this.taskRegistry.getTask(taskId);
+    if (task?.threadId) {
+      activeThreadId = task.threadId;
+    }
+
+    if (!activeThreadId) {
+      const { threadId } = await this.bootstrap();
+      activeThreadId = threadId;
+    }
 
     let iteration = 0;
     let lastVerify = await this.runVerify(taskId);
+    let previousDiffStat: string | null = null;
+    let identicalDiffStreak = 0;
     while (iteration < maxIterations) {
       iteration += 1;
 
@@ -218,6 +244,21 @@ export class Controller extends EventEmitter {
       }
 
       const diffStat = await this.workspaceManager.runInWorkspace(taskId, ["git", "diff", "--stat"]);
+      const normalizedDiffStat = diffStat.stdout.trim();
+      if (previousDiffStat !== null && previousDiffStat === normalizedDiffStat) {
+        identicalDiffStreak += 1;
+      } else {
+        identicalDiffStreak = 1;
+      }
+      previousDiffStat = normalizedDiffStat;
+
+      if (identicalDiffStreak >= MAX_IDENTICAL_FIX_DIFFS) {
+        await this.updateTaskStatusIfExists(taskId, "failed");
+        throw new Error(
+          `Aborting fix loop for taskId=${taskId}: identical diff observed ${identicalDiffStreak} consecutive times.`,
+        );
+      }
+
       const prompt = this.buildFixPrompt({
         taskId,
         iteration,
@@ -227,7 +268,8 @@ export class Controller extends EventEmitter {
       });
 
       await this.executeTurn({
-        threadId,
+        taskId,
+        threadId: activeThreadId,
         prompt,
         cwd: lastVerify.workspacePath,
       });
@@ -241,6 +283,148 @@ export class Controller extends EventEmitter {
       iterations: maxIterations,
       lastVerify,
     };
+  }
+
+  public async createPullRequest(taskId: string, title: string, body: string): Promise<string> {
+    const trimmedTitle = title.trim();
+    if (trimmedTitle.length === 0) {
+      throw new Error("createPullRequest requires a non-empty title");
+    }
+
+    await this.workspaceManager.createWorkspace(taskId);
+    const branchName = await this.gitManager.pushBranch(taskId);
+    if (branchName === "main") {
+      throw new Error("Refusing to open pull request from main to main. Create and switch to a feature branch first.");
+    }
+
+    const remoteResult = await this.workspaceManager.runInWorkspace(taskId, ["git", "remote", "get-url", "origin"]);
+    const repo = this.parseGitHubRepo(remoteResult.stdout);
+    const token = process.env.GITHUB_TOKEN?.trim();
+    if (!token) {
+      throw new Error("GITHUB_TOKEN is required to create pull requests");
+    }
+
+    const response = await fetch(`https://api.github.com/repos/${repo.owner}/${repo.name}/pulls`, {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "User-Agent": "gpc-codex-controller",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({
+        title: trimmedTitle,
+        body,
+        head: branchName,
+        base: "main",
+      }),
+    });
+
+    const payload = await response.json() as unknown;
+    if (!response.ok) {
+      const message = this.extractGitHubApiErrorMessage(payload) ?? `GitHub API error (status ${response.status})`;
+      throw new Error(`Failed to create pull request: ${message}`);
+    }
+
+    if (typeof payload !== "object" || payload === null) {
+      throw new Error("GitHub API returned an invalid pull request payload");
+    }
+
+    const htmlUrl = (payload as Record<string, unknown>).html_url;
+    if (typeof htmlUrl !== "string" || htmlUrl.length === 0) {
+      throw new Error("GitHub API response missing pull request html_url");
+    }
+
+    return htmlUrl;
+  }
+
+  public async createTask(taskId: string): Promise<TaskRecord> {
+    await this.ensureSessionReady();
+
+    const existing = await this.taskRegistry.getTask(taskId);
+    if (existing) {
+      throw new Error(`Task already exists: ${taskId}`);
+    }
+
+    const workspacePath = await this.workspaceManager.createWorkspace(taskId);
+    const branchName = await this.gitManager.createBranch(taskId);
+    const threadId = await this.createThreadForWorkspace(workspacePath);
+
+    const record: TaskRecord = {
+      taskId,
+      workspacePath,
+      branchName,
+      threadId,
+      createdAt: new Date().toISOString(),
+      status: "created",
+    };
+
+    return this.taskRegistry.createTask(record);
+  }
+
+  public async getTask(taskId: string): Promise<TaskRecord | null> {
+    return this.taskRegistry.getTask(taskId);
+  }
+
+  public async updateTaskStatus(taskId: string, status: TaskStatus): Promise<TaskRecord> {
+    return this.taskRegistry.updateTaskStatus(taskId, status);
+  }
+
+  public async runMutation(taskId: string, featureDescription: string): Promise<RunMutationResult> {
+    const normalizedFeatureDescription = featureDescription.trim();
+    if (normalizedFeatureDescription.length === 0) {
+      throw new Error("runMutation requires a non-empty featureDescription");
+    }
+
+    let task: TaskRecord | null = null;
+    try {
+      task = await this.createTask(taskId);
+      await this.updateTaskStatus(taskId, "mutating");
+
+      await this.executeTurn({
+        taskId,
+        threadId: task.threadId,
+        prompt: this.buildMutationPrompt(normalizedFeatureDescription),
+        cwd: task.workspacePath,
+      });
+
+      await this.updateTaskStatus(taskId, "verifying");
+      const fixResult = await this.fixUntilGreen(taskId, 5);
+      if (!fixResult.success) {
+        throw new Error(`Verification did not pass within iteration limit for taskId=${taskId}`);
+      }
+
+      await this.updateTaskStatus(taskId, "ready");
+      const commitMessage = this.generateCommitMessage(normalizedFeatureDescription);
+      const committed = await this.gitManager.commitAll(taskId, commitMessage);
+      if (!committed) {
+        throw new Error("Mutation finished with no file changes to commit");
+      }
+
+      const title = this.generatePullRequestTitle(normalizedFeatureDescription);
+      const body = this.generatePullRequestBody(taskId, normalizedFeatureDescription, fixResult.iterations);
+      const prUrl = await this.createPullRequest(taskId, title, body);
+      await this.updateTaskStatus(taskId, "pr_opened");
+
+      return {
+        taskId,
+        branch: task.branchName,
+        prUrl,
+        iterations: fixResult.iterations,
+        success: true,
+      };
+    } catch (error) {
+      if (task) {
+        try {
+          await this.updateTaskStatus(task.taskId, "failed");
+        } catch {
+          // Preserve original error when task status update fails.
+        }
+      }
+
+      throw error;
+    }
   }
 
   private async ensureSessionReady(): Promise<void> {
@@ -301,7 +485,21 @@ export class Controller extends EventEmitter {
   }
 
   private async createAndPersistNewThread(cwd: string): Promise<string> {
-    const result = await this.appServerClient.startThread({
+    const result = await this.createThread(cwd);
+    const threadId = this.extractThreadId(result);
+    this.state.threadId = threadId;
+    await this.saveState();
+
+    return threadId;
+  }
+
+  private async createThreadForWorkspace(cwd: string): Promise<string> {
+    const result = await this.createThread(cwd);
+    return this.extractThreadId(result);
+  }
+
+  private async createThread(cwd: string): Promise<ThreadStartResult> {
+    return this.appServerClient.startThread({
       model: this.model,
       modelProvider: null,
       cwd,
@@ -311,22 +509,22 @@ export class Controller extends EventEmitter {
       baseInstructions: null,
       developerInstructions: null,
     });
-
-    const threadId = this.extractThreadId(result);
-    this.state.threadId = threadId;
-    await this.saveState();
-
-    return threadId;
   }
 
   private async executeTurn(args: {
+    taskId?: string;
     threadId: string;
     prompt: string;
     cwd: string;
+    allowCoordinatorEdit?: boolean;
   }): Promise<StartOrContinueTaskResult> {
     const prompt = args.prompt.trim();
     if (prompt.length === 0) {
       throw new Error("Prompt must be a non-empty string");
+    }
+
+    if (args.taskId) {
+      this.incrementAndAssertTurnBudget(args.taskId);
     }
 
     const startResult = await this.appServerClient.startTurn({
@@ -347,7 +545,25 @@ export class Controller extends EventEmitter {
       (params) => params?.threadId === args.threadId && params.turn.id === startedTurnId,
     );
 
-    const completion = await this.waitForTurnOutcome(waitForCompletion, args.threadId, startedTurnId);
+    let completion: TurnCompletedParams | undefined;
+    try {
+      completion = await this.waitForTurnOutcome(waitForCompletion, args.threadId, startedTurnId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Timed out waiting for notification: turn/completed")) {
+        await this.appServerClient.stop();
+        this.bootstrapped = false;
+        if (args.taskId) {
+          await this.updateTaskStatusIfExists(args.taskId, "failed");
+        }
+
+        throw new Error(
+          `Turn exceeded ${Math.floor(TURN_TIMEOUT_MS / 60_000)} minutes and was terminated (thread=${args.threadId}, turn=${startedTurnId})`,
+        );
+      }
+
+      throw error;
+    }
 
     if (!completion) {
       throw new Error(`Missing turn/completed payload for thread=${args.threadId} turn=${startedTurnId}`);
@@ -356,7 +572,14 @@ export class Controller extends EventEmitter {
     const status = completion.turn.status;
     if (status === "failed" || status === "interrupted") {
       const failureMessage = completion.turn.error?.message ?? "No error message from server";
+      if (args.taskId) {
+        await this.updateTaskStatusIfExists(args.taskId, "failed");
+      }
       throw new Error(`Turn ${status} (thread=${args.threadId}, turn=${completion.turn.id}): ${failureMessage}`);
+    }
+
+    if (args.taskId) {
+      await this.enforceBlockedEditGuardrail(args.taskId, args.allowCoordinatorEdit ?? false);
     }
 
     return {
@@ -596,5 +819,167 @@ export class Controller extends EventEmitter {
       "",
       "Now produce and apply the smallest valid fix.",
     ].join("\n");
+  }
+
+  private parseGitHubRepo(originUrlOutput: string): { owner: string; name: string } {
+    const originUrl = originUrlOutput.trim();
+    if (originUrl.length === 0) {
+      throw new Error("git remote get-url origin returned an empty URL");
+    }
+
+    if (originUrl.startsWith("git@github.com:")) {
+      const path = originUrl.slice("git@github.com:".length).replace(/\.git$/, "");
+      const parts = path.split("/");
+      const owner = parts[0];
+      const name = parts[1];
+
+      if (!owner || !name) {
+        throw new Error(`Unable to parse GitHub remote URL: ${originUrl}`);
+      }
+
+      return { owner, name };
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(originUrl);
+    } catch {
+      throw new Error(`Unsupported git remote URL format: ${originUrl}`);
+    }
+
+    if (parsedUrl.hostname !== "github.com") {
+      throw new Error(`Origin remote must be github.com, got: ${parsedUrl.hostname}`);
+    }
+
+    const path = parsedUrl.pathname.replace(/^\/+/, "").replace(/\.git$/, "");
+    const parts = path.split("/");
+    const owner = parts[0];
+    const name = parts[1];
+
+    if (!owner || !name) {
+      throw new Error(`Unable to parse GitHub remote URL: ${originUrl}`);
+    }
+
+    return { owner, name };
+  }
+
+  private extractGitHubApiErrorMessage(payload: unknown): string | null {
+    if (typeof payload !== "object" || payload === null) {
+      return null;
+    }
+
+    const record = payload as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim().length > 0) {
+      return record.message;
+    }
+
+    return null;
+  }
+
+  public buildMutationPrompt(featureDescription: string): string {
+    const normalized = featureDescription.trim();
+    if (normalized.length === 0) {
+      throw new Error("buildMutationPrompt requires a non-empty featureDescription");
+    }
+
+    return [
+      "Task: implement the requested feature in the gpc-cres monorepo with minimal, correct changes.",
+      "",
+      "Repository rules (must follow):",
+      "1. Follow pnpm workspace rules and workspace boundaries.",
+      "2. Enforce strict TypeScript correctness; do not introduce type holes.",
+      "3. Respect orgId scoping requirements for all tenant-sensitive paths and logic.",
+      "4. Never parallelize Prisma migrations; migration-related operations must be serial and explicit.",
+      "5. Follow existing package structure; avoid cross-package reshaping unless strictly required.",
+      "6. Run pnpm verify after changes and use fix-until-green behavior before finishing.",
+      "7. Keep edits minimal and deterministic.",
+      "",
+      "Feature request:",
+      normalized,
+    ].join("\n");
+  }
+
+  private generateCommitMessage(featureDescription: string): string {
+    const summary = this.toSlugSummary(featureDescription, 60);
+    return `feat: ${summary}`;
+  }
+
+  private generatePullRequestTitle(featureDescription: string): string {
+    const summary = this.toSlugSummary(featureDescription, 72);
+    return `feat: ${summary}`;
+  }
+
+  private generatePullRequestBody(taskId: string, featureDescription: string, iterations: number): string {
+    return [
+      `Task ID: ${taskId}`,
+      "",
+      "Requested feature:",
+      featureDescription,
+      "",
+      `Verification fix iterations: ${iterations}`,
+    ].join("\n");
+  }
+
+  private toSlugSummary(input: string, maxLength: number): string {
+    const oneLine = input.replace(/\s+/g, " ").trim();
+    if (oneLine.length <= maxLength) {
+      return oneLine;
+    }
+
+    return `${oneLine.slice(0, Math.max(1, maxLength - 3)).trim()}...`;
+  }
+
+  private incrementAndAssertTurnBudget(taskId: string): void {
+    const used = this.turnStartCountByTask.get(taskId) ?? 0;
+    const next = used + 1;
+    this.turnStartCountByTask.set(taskId, next);
+    if (next > MAX_TURNS_PER_TASK) {
+      throw new Error(`Turn budget exceeded for taskId=${taskId}: max ${MAX_TURNS_PER_TASK} turn/start calls.`);
+    }
+  }
+
+  private async enforceBlockedEditGuardrail(taskId: string, allowCoordinatorEdit: boolean): Promise<void> {
+    const diffNames = await this.workspaceManager.runInWorkspace(taskId, ["git", "diff", "--name-only"]);
+    const changedFiles = diffNames.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+
+    const blocked = changedFiles.filter((file) => {
+      const normalized = file.replace(/\\/g, "/");
+      if (normalized.includes("/")) {
+        return false;
+      }
+
+      if (!BLOCKED_ROOT_FILES.has(normalized)) {
+        return false;
+      }
+
+      if (normalized === "coordinator.ts" && allowCoordinatorEdit) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (blocked.length === 0) {
+      return;
+    }
+
+    await this.updateTaskStatusIfExists(taskId, "failed");
+    throw new Error(`Blocked root file edits detected for taskId=${taskId}: ${blocked.join(", ")}`);
+  }
+
+  private async updateTaskStatusIfExists(taskId: string, status: TaskStatus): Promise<void> {
+    const task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      return;
+    }
+
+    try {
+      await this.taskRegistry.updateTaskStatus(taskId, status);
+    } catch {
+      // Preserve caller errors when status update is not possible.
+    }
   }
 }
