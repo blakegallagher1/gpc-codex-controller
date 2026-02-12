@@ -59,6 +59,7 @@ export class Controller extends EventEmitter {
 
   private state: ControllerState = {};
   private bootstrapped = false;
+  private bootstrapPromise: Promise<void> | null = null;
   private turnEventsBound = false;
   private itemEventsBound = false;
   private approvalEventsBound = false;
@@ -432,17 +433,30 @@ export class Controller extends EventEmitter {
       return;
     }
 
-    await this.loadState();
-    await this.appServerClient.start();
+    if (this.bootstrapPromise) {
+      await this.bootstrapPromise;
+      return;
+    }
 
-    await this.initialize();
-    await this.ensureChatGptLogin();
+    this.bootstrapPromise = (async () => {
+      await this.loadState();
+      await this.appServerClient.start();
 
-    this.handleTurnEvents();
-    this.handleItemEvents();
-    this.handleApprovalEvents();
+      await this.initialize();
+      await this.ensureChatGptLogin();
 
-    this.bootstrapped = true;
+      this.handleTurnEvents();
+      this.handleItemEvents();
+      this.handleApprovalEvents();
+
+      this.bootstrapped = true;
+    })();
+
+    try {
+      await this.bootstrapPromise;
+    } finally {
+      this.bootstrapPromise = null;
+    }
   }
 
   private async initialize(): Promise<void> {
@@ -453,7 +467,16 @@ export class Controller extends EventEmitter {
       },
     };
 
-    await this.appServerClient.initialize(initializeParams);
+    try {
+      await this.appServerClient.initialize(initializeParams);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Already initialized")) {
+        // codex app-server may treat initialize as a one-time operation per process; treat as idempotent.
+        return;
+      }
+      throw error;
+    }
   }
 
   private async ensureChatGptLogin(): Promise<void> {
@@ -464,11 +487,22 @@ export class Controller extends EventEmitter {
 
     console.log(`Open this URL to complete ChatGPT authentication: ${loginStart.authUrl}`);
 
-    const completion = await this.appServerClient.waitForNotification<LoginCompletedParams>(
-      "account/login/completed",
-      this.loginTimeoutMs,
-      (params) => params?.loginId === loginStart.loginId,
-    );
+    let completion: LoginCompletedParams | undefined;
+    try {
+      completion = await this.appServerClient.waitForNotification<LoginCompletedParams>(
+        "account/login/completed",
+        this.loginTimeoutMs,
+        (params) => params?.loginId === loginStart.loginId,
+      );
+    } catch (error) {
+      // If the CLI is already authenticated (device auth), the app-server may not emit a completion event.
+      // Proceed and let subsequent turn/start calls surface auth failures if any.
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Timed out waiting for notification")) {
+        return;
+      }
+      throw error;
+    }
 
     if (!completion?.success) {
       const detail = completion?.error ?? "unknown login error";
