@@ -118,7 +118,7 @@ The high-level flow is:
 |----------|---------|-------------|
 | `MCP_BIND` | `127.0.0.1` | Bind address for the HTTP server |
 | `MCP_PORT` | `8787` | Port for the HTTP server (also reads `CONTROLLER_PORT`) |
-| `MCP_BASE_URL` | *(none)* | Public base URL for the MCP endpoint (e.g. `https://mcp.example.com`). When set, the startup banner and JSON output show this URL instead of the local bind address. Use this when running behind a reverse proxy or Cloudflare Tunnel. |
+| `MCP_BASE_URL` | *(none)* | Public base URL for the MCP endpoint (e.g. `https://mcp.example.com`). Use when running behind a reverse proxy or tunnel. |
 | `MCP_BEARER_TOKEN` | *(none)* | Optional bearer token for authenticating inbound requests |
 | `CODEX_HOME` | `~/.codex` | Directory where Codex persists auth state |
 | `GITHUB_TOKEN` | *(none)* | GitHub token used for PR automation |
