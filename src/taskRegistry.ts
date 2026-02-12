@@ -15,7 +15,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, ReadonlySet<TaskStatus>> = {
   fixing: new Set(["mutating", "verifying", "ready", "failed"]),
   ready: new Set(["mutating", "pr_opened", "failed"]),
   pr_opened: new Set(["failed"]),
-  failed: new Set([]),
+  failed: new Set(["ready", "mutating", "created"]),
 };
 
 export class TaskRegistry {

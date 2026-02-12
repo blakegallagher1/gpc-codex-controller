@@ -120,6 +120,8 @@ export class AutonomousOrchestrator {
 
       const maxPhaseFixes = params.maxPhaseFixes;
 
+      let consecutiveFailures = 0;
+
       for (let i = 0; i < plan.phases.length; i++) {
         // Cooperative cancellation check
         const currentRun = await this.getRun(record.runId);
@@ -133,7 +135,8 @@ export class AutonomousOrchestrator {
         await this.controller.updatePlanPhase(record.taskId, i, "in_progress");
 
         // Ensure task is in a state that can transition to "mutating".
-        // After a previous phase's fix loop the task may still be "verifying" or "fixing".
+        // After a previous phase's fix loop the task may be in "verifying", "fixing", or even "failed".
+        // The state machine allows failed → ready so the orchestrator can recover between phases.
         try {
           await this.controller.updateTaskStatus(record.taskId, "ready");
         } catch {
@@ -188,6 +191,7 @@ export class AutonomousOrchestrator {
 
           if (phaseResult.status === "completed") {
             await this.controller.updatePlanPhase(record.taskId, i, "completed");
+            consecutiveFailures = 0;
 
             // Checkpoint after successful phase
             try {
@@ -195,20 +199,44 @@ export class AutonomousOrchestrator {
             } catch {
               // Non-critical
             }
+          } else {
+            consecutiveFailures++;
           }
         } catch (error) {
           phaseResult.status = "failed";
           phaseResult.error = error instanceof Error ? error.message : String(error);
+          consecutiveFailures++;
           try {
             await this.controller.updatePlanPhase(record.taskId, i, "failed");
           } catch {
             // Preserve original error
+          }
+
+          // After a critical failure (thrown error), reset task from "failed" to "ready"
+          // so subsequent phases can still attempt "ready → mutating".
+          try {
+            await this.controller.updateTaskStatus(record.taskId, "ready");
+          } catch {
+            // If we can't recover the task status, bail out entirely
+            phaseResult.durationMs = Date.now() - phaseStart;
+            record.phases.push(phaseResult);
+            await this.updateRunRecord(record);
+            throw new Error(
+              `Unrecoverable task state after phase ${i} (${phase.name}) failed: ${phaseResult.error}`,
+            );
           }
         }
 
         phaseResult.durationMs = Date.now() - phaseStart;
         record.phases.push(phaseResult);
         await this.updateRunRecord(record);
+
+        // If two or more consecutive phases failed, abort — continuing is unlikely to help
+        if (consecutiveFailures >= 2) {
+          throw new Error(
+            `Aborting: ${consecutiveFailures} consecutive phases failed. Last error: ${phaseResult.error}`,
+          );
+        }
       }
 
       // Abort if zero phases succeeded
