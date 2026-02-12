@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AppServerClient } from "./appServerClient.js";
 import { Controller } from "./controller.js";
+import { startRpcServer } from "./rpcServer.js";
 
 interface CliOptions {
   workspace: string;
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
   const cli = values as unknown as CliOptions;
   const command = positionals[0];
   if (!command) {
-    throw new Error("Missing command. Use one of: start, continue, verify, fix, pr");
+    throw new Error("Missing command. Use one of: serve, start, continue, verify, fix, pr");
   }
 
   const workspacePath = resolve(cli.workspace);
@@ -133,6 +134,49 @@ async function main(): Promise<void> {
   });
 
   switch (command) {
+    case "serve": {
+      const bindHost = process.env.MCP_BIND ?? "127.0.0.1";
+      const portText = process.env.MCP_PORT ?? process.env.CONTROLLER_PORT ?? "8787";
+      const port = Number(portText);
+      if (!Number.isFinite(port) || port <= 0) {
+        throw new Error(`Invalid MCP_PORT: ${portText}`);
+      }
+
+      const bearerToken = process.env.MCP_BEARER_TOKEN;
+      const server = await startRpcServer({
+        controller,
+        bindHost,
+        port,
+        ...(bearerToken && bearerToken.trim().length > 0 ? { bearerToken } : {}),
+      });
+
+      process.stdout.write(
+        JSON.stringify({
+          ok: true,
+          command,
+          bindHost,
+          port,
+          routes: { health: "/healthz", rpc: "/rpc" },
+          auth: bearerToken ? "bearer" : "none",
+        }) + "\n",
+      );
+
+      const stop = async (): Promise<void> => {
+        await server.close();
+        await shutdown();
+      };
+
+      process.on("SIGINT", () => {
+        void stop().finally(() => process.exit(130));
+      });
+
+      process.on("SIGTERM", () => {
+        void stop().finally(() => process.exit(143));
+      });
+
+      // Keep process alive.
+      await new Promise<void>(() => {});
+    }
     case "start": {
       if (!cli.prompt || cli.prompt.trim().length === 0) {
         throw new Error("start requires --prompt");
