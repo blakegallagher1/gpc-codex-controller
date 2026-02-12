@@ -167,6 +167,129 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       return await controller.runDocGardening(params.taskId);
     }
 
+    case "plan/create": {
+      const params = request.params as unknown as { taskId?: string; description?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("plan/create requires params.taskId");
+      if (!params?.description || params.description.trim().length === 0) throw new Error("plan/create requires params.description");
+      return await controller.createExecutionPlan(params.taskId, params.description);
+    }
+
+    case "plan/get": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("plan/get requires params.taskId");
+      return await controller.getExecutionPlan(params.taskId);
+    }
+
+    case "plan/updatePhase": {
+      const params = request.params as unknown as { taskId?: string; phaseIndex?: number; status?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("plan/updatePhase requires params.taskId");
+      if (typeof params.phaseIndex !== "number") throw new Error("plan/updatePhase requires params.phaseIndex");
+      if (!params.status) throw new Error("plan/updatePhase requires params.status");
+      return await controller.updatePlanPhase(params.taskId, params.phaseIndex, params.status as "pending" | "in_progress" | "completed" | "failed" | "skipped");
+    }
+
+    case "ci/record": {
+      const params = request.params as unknown as { taskId?: string; passed?: boolean; exitCode?: number; duration_ms?: number; failureCount?: number; failureSummary?: string[] };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/record requires params.taskId");
+      return await controller.recordCIRun({ taskId: params.taskId, passed: params.passed ?? false, exitCode: params.exitCode ?? 1, duration_ms: params.duration_ms ?? 0, failureCount: params.failureCount ?? 0, failureSummary: params.failureSummary ?? [] });
+    }
+
+    case "ci/status": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/status requires params.taskId");
+      return await controller.getCIStatus(params.taskId);
+    }
+
+    case "ci/history": {
+      const params = request.params as unknown as { taskId?: string; limit?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/history requires params.taskId");
+      return await controller.getCIHistory(params.taskId, params.limit);
+    }
+
+    case "review/run": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("review/run requires params.taskId");
+      return await controller.reviewPR(params.taskId);
+    }
+
+    case "review/loop": {
+      const params = request.params as unknown as { taskId?: string; maxRounds?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("review/loop requires params.taskId");
+      return await controller.runReviewLoop(params.taskId, params.maxRounds ?? 3);
+    }
+
+    case "app/boot": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("app/boot requires params.taskId");
+      return await controller.bootApp(params.taskId);
+    }
+
+    case "log/query": {
+      const params = request.params as unknown as { taskId?: string; pattern?: string; limit?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("log/query requires params.taskId");
+      if (!params?.pattern || params.pattern.trim().length === 0) throw new Error("log/query requires params.pattern");
+      return await controller.queryLogs(params.taskId, params.pattern, params.limit);
+    }
+
+    case "lint/run": {
+      const params = request.params as unknown as { taskId?: string; rules?: string[] };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("lint/run requires params.taskId");
+      return await controller.runLinter(params.taskId, params.rules);
+    }
+
+    case "arch/validate": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("arch/validate requires params.taskId");
+      return await controller.validateArchitecture(params.taskId);
+    }
+
+    case "doc/validate": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("doc/validate requires params.taskId");
+      return await controller.validateDocs(params.taskId);
+    }
+
+    case "quality/score": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("quality/score requires params.taskId");
+      return await controller.getQualityScore(params.taskId);
+    }
+
+    case "gc/sweep": {
+      return await controller.runGCSweep();
+    }
+
+    case "bug/reproduce": {
+      const params = request.params as unknown as { taskId?: string; bugDescription?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("bug/reproduce requires params.taskId");
+      if (!params?.bugDescription || params.bugDescription.trim().length === 0) throw new Error("bug/reproduce requires params.bugDescription");
+      return await controller.reproduceBug(params.taskId, params.bugDescription);
+    }
+
+    case "checkpoint/create": {
+      const params = request.params as unknown as { taskId?: string; description?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("checkpoint/create requires params.taskId");
+      return await controller.checkpointTask(params.taskId, params.description ?? "Manual checkpoint");
+    }
+
+    case "checkpoint/list": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("checkpoint/list requires params.taskId");
+      return await controller.getTaskCheckpoints(params.taskId);
+    }
+
+    case "ref/list": {
+      const params = request.params as unknown as { category?: string } | undefined;
+      return await controller.getReferenceDocs(params?.category);
+    }
+
+    case "ref/add": {
+      const params = request.params as unknown as { category?: string; title?: string; content?: string };
+      if (!params?.title || params.title.trim().length === 0) throw new Error("ref/add requires params.title");
+      if (!params?.content || params.content.trim().length === 0) throw new Error("ref/add requires params.content");
+      return await controller.addReferenceDoc({ category: params.category ?? "general", title: params.title, content: params.content });
+    }
+
     case "task/parallel": {
       const params = request.params as unknown as { tasks?: Array<{ taskId: string; featureDescription: string }> };
       if (!params?.tasks || !Array.isArray(params.tasks) || params.tasks.length === 0) {
@@ -274,6 +397,9 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
           "mutation/run",
           "garden/run",
           "task/parallel",
+          "review/loop",
+          "app/boot",
+          "bug/reproduce",
         ]);
         if (asyncMethods.has(typed.method)) {
           const job = startJob(typed.method, async () => handle(options.controller, typed));

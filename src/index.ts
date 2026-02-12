@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   const cli = values as unknown as CliOptions;
   const command = positionals[0];
   if (!command) {
-    throw new Error("Missing command. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel");
+    throw new Error("Missing command. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel, review, review-loop, quality, lint, arch-validate, doc-validate, reproduce-bug, gc-sweep");
   }
 
   const workspacePath = resolve(cli.workspace);
@@ -331,8 +331,123 @@ async function main(): Promise<void> {
       );
       break;
     }
+    case "review": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("review requires --taskId");
+      }
+
+      const result = await controller.reviewPR(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          approved: result.approved,
+          errorCount: result.errorCount,
+          warningCount: result.warningCount,
+          suggestionCount: result.suggestionCount,
+        }),
+      );
+      break;
+    }
+    case "review-loop": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("review-loop requires --taskId");
+      }
+
+      const maxRounds = parsePositiveInteger(cli.maxIterations, "maxIterations") ?? 3;
+      const result = await controller.runReviewLoop(cli.taskId, maxRounds);
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
+    case "quality": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("quality requires --taskId");
+      }
+
+      const result = await controller.getQualityScore(cli.taskId);
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
+    case "lint": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("lint requires --taskId");
+      }
+
+      const result = await controller.runLinter(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          passed: result.passed,
+          errorCount: result.errorCount,
+          warningCount: result.warningCount,
+        }),
+      );
+      break;
+    }
+    case "arch-validate": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("arch-validate requires --taskId");
+      }
+
+      const result = await controller.validateArchitecture(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          passed: result.passed,
+          violationCount: result.violations.length,
+        }),
+      );
+      break;
+    }
+    case "doc-validate": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("doc-validate requires --taskId");
+      }
+
+      const result = await controller.validateDocs(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          passed: result.passed,
+          issueCount: result.issues.length,
+        }),
+      );
+      break;
+    }
+    case "reproduce-bug": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("reproduce-bug requires --taskId");
+      }
+      if (!cli.prompt || cli.prompt.trim().length === 0) {
+        throw new Error("reproduce-bug requires --prompt (bug description)");
+      }
+
+      const result = await controller.reproduceBug(cli.taskId, cli.prompt);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          reproduced: result.reproduced,
+          testFile: result.testFile,
+        }),
+      );
+      break;
+    }
+    case "gc-sweep": {
+      const result = await controller.runGCSweep();
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
     default:
-      throw new Error(`Unsupported command: ${command}. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel`);
+      throw new Error(`Unsupported command: ${command}. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel, review, review-loop, quality, lint, arch-validate, doc-validate, reproduce-bug, gc-sweep`);
   }
 
   await shutdown();

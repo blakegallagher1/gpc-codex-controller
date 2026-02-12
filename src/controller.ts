@@ -5,21 +5,49 @@ import { AppServerClient } from "./appServerClient.js";
 import { EvalManager, type EvalResult } from "./evalManager.js";
 import { MemoryManager } from "./memoryManager.js";
 import { SkillsManager } from "./skillsManager.js";
+import { ExecutionPlanManager } from "./executionPlanManager.js";
+import { CIStatusManager } from "./ciStatusManager.js";
+import { PRReviewManager } from "./prReviewManager.js";
+import { AppBootManager } from "./appBootManager.js";
+import { LogQueryManager } from "./logQueryManager.js";
+import { CDPBridge } from "./cdpBridge.js";
+import { LinterFramework } from "./linterFramework.js";
+import { ArchitectureValidator } from "./architectureValidator.js";
+import { DocValidator } from "./docValidator.js";
+import { QualityScoreManager } from "./qualityScoreManager.js";
+import { BugReproductionManager } from "./bugReproductionManager.js";
+import { TaskContinuationManager } from "./taskContinuationManager.js";
+import { ReferenceDocManager } from "./referenceDocManager.js";
 import type {
   ApprovalPolicy,
+  AppBootResult,
+  ArchValidationResult,
+  BugReproResult,
+  CIRunRecord,
+  CIStatusSummary,
   ControllerState,
   DocGardenResult,
+  DocValidationResult,
   EvalSummary,
+  ExecutionPlan,
   FixUntilGreenResult,
+  GCSweepResult,
   InitializeParams,
   ItemDeltaParams,
+  LintResult,
+  LogQueryResult,
   LoginCompletedParams,
   ParallelRunResult,
   ParallelTaskRequest,
   ParallelTaskResult,
+  PlanPhaseStatus,
+  QualityScore,
+  ReferenceDoc,
+  ReviewResult,
   RunMutationResult,
   SandboxPolicy,
   StartOrContinueTaskResult,
+  TaskCheckpoint,
   TaskRecord,
   TaskStatus,
   ThreadStartResult,
@@ -75,6 +103,19 @@ export class Controller extends EventEmitter {
   private readonly memoryManager: MemoryManager;
   private readonly evalManager: EvalManager;
   private readonly maxParallelTasks: number;
+  private readonly executionPlanManager: ExecutionPlanManager;
+  private readonly ciStatusManager: CIStatusManager;
+  private readonly prReviewManager: PRReviewManager;
+  private readonly appBootManager: AppBootManager;
+  private readonly logQueryManager: LogQueryManager;
+  private readonly cdpBridge: CDPBridge;
+  private readonly linterFramework: LinterFramework;
+  private readonly architectureValidator: ArchitectureValidator;
+  private readonly docValidator: DocValidator;
+  private readonly qualityScoreManager: QualityScoreManager;
+  private readonly bugReproductionManager: BugReproductionManager;
+  private readonly taskContinuationManager: TaskContinuationManager;
+  private readonly referenceDocManager: ReferenceDocManager;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -110,6 +151,28 @@ export class Controller extends EventEmitter {
     this.memoryManager = new MemoryManager(options.memoryFilePath ?? `${stateDir}/memory.json`);
     this.evalManager = new EvalManager(options.evalHistoryPath ?? `${stateDir}/eval-history.json`, this.workspaceManager);
     this.maxParallelTasks = options.maxParallelTasks ?? DEFAULT_MAX_PARALLEL;
+
+    // New Harness Engineering managers
+    this.executionPlanManager = new ExecutionPlanManager(`${stateDir}/plans.json`);
+    this.ciStatusManager = new CIStatusManager(`${stateDir}/ci-status.json`);
+    this.prReviewManager = new PRReviewManager(this.workspaceManager, this.skillsManager);
+    this.appBootManager = new AppBootManager(this.workspaceManager);
+    this.logQueryManager = new LogQueryManager(this.workspaceManager);
+    this.cdpBridge = new CDPBridge();
+    this.linterFramework = new LinterFramework(this.workspaceManager);
+    this.architectureValidator = new ArchitectureValidator(this.workspaceManager);
+    this.docValidator = new DocValidator(this.workspaceManager);
+    this.qualityScoreManager = new QualityScoreManager(
+      `${stateDir}/quality-scores.json`,
+      this.evalManager,
+      this.ciStatusManager,
+      this.linterFramework,
+      this.architectureValidator,
+      this.docValidator,
+    );
+    this.bugReproductionManager = new BugReproductionManager(this.workspaceManager, this.skillsManager);
+    this.taskContinuationManager = new TaskContinuationManager(`${stateDir}/checkpoints.json`);
+    this.referenceDocManager = new ReferenceDocManager(`${stateDir}/reference-docs.json`);
   }
 
   public async bootstrap(): Promise<{ threadId: string }> {
@@ -1222,6 +1285,136 @@ export class Controller extends EventEmitter {
       turnId: result.turnId,
       status: result.status,
     };
+  }
+
+  // --- Execution Plans ---
+
+  public async createExecutionPlan(taskId: string, description: string): Promise<ExecutionPlan> {
+    return this.executionPlanManager.createPlan(taskId, description);
+  }
+
+  public async getExecutionPlan(taskId: string): Promise<ExecutionPlan | null> {
+    return this.executionPlanManager.getPlan(taskId);
+  }
+
+  public async updatePlanPhase(taskId: string, phaseIndex: number, status: PlanPhaseStatus): Promise<ExecutionPlan> {
+    return this.executionPlanManager.updatePhaseStatus(taskId, phaseIndex, status);
+  }
+
+  // --- CI Status ---
+
+  public async recordCIRun(record: Omit<CIRunRecord, "runId" | "timestamp">): Promise<CIRunRecord> {
+    return this.ciStatusManager.recordRun(record);
+  }
+
+  public async getCIStatus(taskId: string): Promise<CIStatusSummary> {
+    return this.ciStatusManager.getStatus(taskId);
+  }
+
+  public async getCIHistory(taskId: string, limit?: number): Promise<CIRunRecord[]> {
+    return this.ciStatusManager.getHistory(taskId, limit);
+  }
+
+  // --- PR Review ---
+
+  public async reviewPR(taskId: string): Promise<ReviewResult> {
+    return this.prReviewManager.reviewDiff(taskId);
+  }
+
+  public async runReviewLoop(taskId: string, maxRounds = 3): Promise<{ rounds: number; finalReview: ReviewResult }> {
+    return this.prReviewManager.runReviewLoop(taskId, maxRounds, async (tid, prompt) => {
+      const task = await this.taskRegistry.getTask(tid);
+      if (!task) throw new Error(`Task not found: ${tid}`);
+      await this.executeTurn({ taskId: tid, threadId: task.threadId, prompt, cwd: task.workspacePath });
+    });
+  }
+
+  // --- App Boot ---
+
+  public async bootApp(taskId: string): Promise<AppBootResult> {
+    return this.appBootManager.bootApp(taskId);
+  }
+
+  // --- Log Query ---
+
+  public async queryLogs(taskId: string, pattern: string, limit?: number): Promise<LogQueryResult> {
+    return this.logQueryManager.queryLogs(taskId, pattern, limit);
+  }
+
+  // --- Linter ---
+
+  public async runLinter(taskId: string, rules?: string[]): Promise<LintResult> {
+    return this.linterFramework.runLinter(taskId, rules);
+  }
+
+  // --- Architecture Validation ---
+
+  public async validateArchitecture(taskId: string): Promise<ArchValidationResult> {
+    return this.architectureValidator.validate(taskId);
+  }
+
+  // --- Doc Validation ---
+
+  public async validateDocs(taskId: string): Promise<DocValidationResult> {
+    return this.docValidator.validate(taskId);
+  }
+
+  // --- Quality Score ---
+
+  public async getQualityScore(taskId: string): Promise<QualityScore> {
+    return this.qualityScoreManager.getScore(taskId);
+  }
+
+  // --- GC Sweep ---
+
+  public async runGCSweep(): Promise<GCSweepResult> {
+    // Note: GCScheduler needs jobs map, but we delegate from rpcServer level.
+    // For controller-level, we return a basic sweep without job pruning.
+    return { staleWorkspacesRemoved: 0, staleJobsPruned: 0, evalEntriesPruned: 0, freedPaths: [] };
+  }
+
+  // --- Bug Reproduction ---
+
+  public async reproduceBug(taskId: string, bugDescription: string): Promise<BugReproResult> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+
+    let task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      task = await this.createTask(taskId);
+    }
+
+    return this.bugReproductionManager.reproduce(
+      taskId,
+      bugDescription,
+      async (tid, threadId, prompt, cwd) => {
+        await this.executeTurn({ taskId: tid, threadId, prompt, cwd });
+      },
+      task.threadId,
+    );
+  }
+
+  // --- Task Continuation ---
+
+  public async checkpointTask(taskId: string, description: string): Promise<TaskCheckpoint> {
+    const task = await this.taskRegistry.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    return this.taskContinuationManager.checkpoint(taskId, task.threadId, description);
+  }
+
+  public async getTaskCheckpoints(taskId: string): Promise<TaskCheckpoint[]> {
+    return this.taskContinuationManager.getCheckpoints(taskId);
+  }
+
+  // --- Reference Docs ---
+
+  public async addReferenceDoc(doc: Omit<ReferenceDoc, "id" | "addedAt">): Promise<ReferenceDoc> {
+    return this.referenceDocManager.addDoc(doc);
+  }
+
+  public async getReferenceDocs(category?: string): Promise<ReferenceDoc[]> {
+    return this.referenceDocManager.listDocs(category);
   }
 
   // --- Parallel Task Execution ---

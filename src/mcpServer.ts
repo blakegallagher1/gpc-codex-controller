@@ -170,6 +170,44 @@ export function createMcpHandler(
       textResult(enqueue("task/parallel", () => controller.runParallel(tasks))),
   );
 
+  /* -- New async tools (Harness Engineering capabilities) ----------- */
+
+  mcp.tool(
+    "review_pr",
+    "Run automated PR review on a task's diff. Returns a jobId.",
+    { taskId: z.string().describe("Task ID to review") },
+    async ({ taskId }) => textResult(enqueue("review/run", () => controller.reviewPR(taskId))),
+  );
+
+  mcp.tool(
+    "run_review_loop",
+    "Iterative review→fix loop until review passes (Ralph Wiggum Loop). Returns a jobId.",
+    {
+      taskId: z.string().describe("Task ID"),
+      maxRounds: z.number().int().min(1).max(10).default(3).describe("Max review/fix rounds"),
+    },
+    async ({ taskId, maxRounds }) =>
+      textResult(enqueue("review/loop", () => controller.runReviewLoop(taskId, maxRounds))),
+  );
+
+  mcp.tool(
+    "boot_app",
+    "Start the app in a task workspace and wait for health check. Returns a jobId.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(enqueue("app/boot", () => controller.bootApp(taskId))),
+  );
+
+  mcp.tool(
+    "reproduce_bug",
+    "Create a minimal reproduction test for a bug. Returns a jobId.",
+    {
+      taskId: z.string().describe("Task ID for the reproduction workspace"),
+      bugDescription: z.string().describe("Description of the bug to reproduce"),
+    },
+    async ({ taskId, bugDescription }) =>
+      textResult(enqueue("bug/reproduce", () => controller.reproduceBug(taskId, bugDescription))),
+  );
+
   /* -- Sync tools (return immediately) ----------------------------- */
 
   mcp.tool(
@@ -221,6 +259,171 @@ export function createMcpHandler(
     "Quick health check — confirms the controller is alive.",
     {},
     async () => textResult({ ok: true, ts: new Date().toISOString() }),
+  );
+
+  /* -- Execution Plan tools --------------------------------------- */
+
+  mcp.tool(
+    "create_execution_plan",
+    "Create a structured execution plan for a task.",
+    {
+      taskId: z.string().describe("Task ID"),
+      description: z.string().describe("Description of what the plan should accomplish"),
+    },
+    async ({ taskId, description }) => textResult(await controller.createExecutionPlan(taskId, description)),
+  );
+
+  mcp.tool(
+    "get_execution_plan",
+    "Get the execution plan for a task.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getExecutionPlan(taskId)),
+  );
+
+  mcp.tool(
+    "update_plan_phase",
+    "Update the status of a plan phase.",
+    {
+      taskId: z.string().describe("Task ID"),
+      phaseIndex: z.number().int().min(0).describe("Phase index (0-based)"),
+      status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]).describe("New phase status"),
+    },
+    async ({ taskId, phaseIndex, status }) => textResult(await controller.updatePlanPhase(taskId, phaseIndex, status)),
+  );
+
+  /* -- CI Status tools -------------------------------------------- */
+
+  mcp.tool(
+    "record_ci_run",
+    "Record a CI/verification run result.",
+    {
+      taskId: z.string().describe("Task ID"),
+      passed: z.boolean().describe("Whether the run passed"),
+      exitCode: z.number().int().default(0).describe("Process exit code"),
+      duration_ms: z.number().int().default(0).describe("Duration in milliseconds"),
+      failureCount: z.number().int().default(0).describe("Number of failures"),
+      failureSummary: z.array(z.string()).default([]).describe("Summary of failures"),
+    },
+    async ({ taskId, passed, exitCode, duration_ms, failureCount, failureSummary }) =>
+      textResult(await controller.recordCIRun({ taskId, passed, exitCode, duration_ms, failureCount, failureSummary })),
+  );
+
+  mcp.tool(
+    "get_ci_status",
+    "Get CI status summary for a task (last run, pass rate, regressions).",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getCIStatus(taskId)),
+  );
+
+  mcp.tool(
+    "get_ci_history",
+    "Get CI run history for a task.",
+    {
+      taskId: z.string().describe("Task ID"),
+      limit: z.number().int().min(1).max(100).default(20).describe("Max entries"),
+    },
+    async ({ taskId, limit }) => textResult(await controller.getCIHistory(taskId, limit)),
+  );
+
+  /* -- Log Query tools -------------------------------------------- */
+
+  mcp.tool(
+    "query_logs",
+    "Search workspace logs/git history for a pattern.",
+    {
+      taskId: z.string().describe("Task ID"),
+      pattern: z.string().describe("Search pattern"),
+      limit: z.number().int().min(1).max(500).default(100).describe("Max results"),
+    },
+    async ({ taskId, pattern, limit }) => textResult(await controller.queryLogs(taskId, pattern, limit)),
+  );
+
+  /* -- Linter tools ----------------------------------------------- */
+
+  mcp.tool(
+    "run_linter",
+    "Run linting checks (ESLint + custom rules) on a task workspace.",
+    {
+      taskId: z.string().describe("Task ID"),
+      rules: z.array(z.string()).optional().describe("Specific rules to run (default: all)"),
+    },
+    async ({ taskId, rules }) => textResult(await controller.runLinter(taskId, rules)),
+  );
+
+  /* -- Architecture validation tools ------------------------------ */
+
+  mcp.tool(
+    "validate_architecture",
+    "Validate architectural rules (dependency direction, layer boundaries, import cycles).",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.validateArchitecture(taskId)),
+  );
+
+  /* -- Doc validation tools --------------------------------------- */
+
+  mcp.tool(
+    "validate_docs",
+    "Validate documentation accuracy (stale references, broken links, outdated examples).",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.validateDocs(taskId)),
+  );
+
+  /* -- Quality Score tools ---------------------------------------- */
+
+  mcp.tool(
+    "get_quality_score",
+    "Get composite quality score (eval + CI + lint + architecture + docs).",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getQualityScore(taskId)),
+  );
+
+  /* -- GC Sweep tools --------------------------------------------- */
+
+  mcp.tool(
+    "run_gc_sweep",
+    "Clean up stale workspaces and old job data.",
+    {},
+    async () => textResult(await controller.runGCSweep()),
+  );
+
+  /* -- Checkpoint tools ------------------------------------------- */
+
+  mcp.tool(
+    "create_checkpoint",
+    "Create a checkpoint for a long-running task.",
+    {
+      taskId: z.string().describe("Task ID"),
+      description: z.string().default("Manual checkpoint").describe("Checkpoint description"),
+    },
+    async ({ taskId, description }) => textResult(await controller.checkpointTask(taskId, description)),
+  );
+
+  mcp.tool(
+    "list_checkpoints",
+    "List all checkpoints for a task.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getTaskCheckpoints(taskId)),
+  );
+
+  /* -- Reference Doc tools ---------------------------------------- */
+
+  mcp.tool(
+    "list_reference_docs",
+    "List stored reference documents, optionally filtered by category.",
+    { category: z.string().optional().describe("Filter by category") },
+    async ({ category }) => textResult(await controller.getReferenceDocs(category)),
+  );
+
+  mcp.tool(
+    "add_reference_doc",
+    "Add a reference document for context enrichment.",
+    {
+      category: z.string().default("general").describe("Document category"),
+      title: z.string().describe("Document title"),
+      content: z.string().describe("Document content"),
+    },
+    async ({ category, title, content }) =>
+      textResult(await controller.addReferenceDoc({ category, title, content })),
   );
 
   /* ================================================================ */

@@ -249,3 +249,193 @@ export interface EvalSummary {
   checkCount: number;
   passedCount: number;
 }
+
+// --- Execution Plans ---
+
+export type PlanPhaseStatus = "pending" | "in_progress" | "completed" | "failed" | "skipped";
+
+export interface PlanPhase {
+  name: string;
+  description: string;
+  status: PlanPhaseStatus;
+  estimatedLOC: number;
+  dependencies: number[]; // indices of prerequisite phases
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ExecutionPlan {
+  taskId: string;
+  description: string;
+  phases: PlanPhase[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// --- CI Status ---
+
+export interface CIRunRecord {
+  taskId: string;
+  runId: string;
+  timestamp: string;
+  passed: boolean;
+  exitCode: number;
+  duration_ms: number;
+  failureCount: number;
+  failureSummary: string[];
+}
+
+export interface CIStatusSummary {
+  taskId: string;
+  lastRun: CIRunRecord | null;
+  totalRuns: number;
+  passRate: number;
+  recentRegressions: string[];
+}
+
+// --- PR Review ---
+
+export type ReviewSeverity = "error" | "warning" | "suggestion";
+
+export interface ReviewFinding {
+  file: string;
+  line: number | null;
+  severity: ReviewSeverity;
+  message: string;
+  rule: string;
+}
+
+export interface ReviewResult {
+  taskId: string;
+  timestamp: string;
+  findings: ReviewFinding[];
+  errorCount: number;
+  warningCount: number;
+  suggestionCount: number;
+  approved: boolean;
+}
+
+// --- App Boot ---
+
+export interface AppBootResult {
+  taskId: string;
+  started: boolean;
+  healthCheck: boolean;
+  url: string | null;
+  pid: number | null;
+  error: string | null;
+}
+
+// --- Log Query ---
+
+export interface LogQueryResult {
+  taskId: string;
+  pattern: string;
+  matchCount: number;
+  lines: string[];
+  truncated: boolean;
+}
+
+// --- Linter ---
+
+export interface LintFinding {
+  file: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  message: string;
+  rule: string;
+}
+
+export interface LintResult {
+  taskId: string;
+  passed: boolean;
+  errorCount: number;
+  warningCount: number;
+  findings: LintFinding[];
+}
+
+// --- Architecture Validation ---
+
+export interface ArchViolation {
+  type: "dependency-direction" | "layer-boundary" | "import-cycle";
+  source: string;
+  target: string;
+  message: string;
+}
+
+export interface ArchValidationResult {
+  taskId: string;
+  passed: boolean;
+  violations: ArchViolation[];
+}
+
+// --- Doc Validation ---
+
+export interface DocIssue {
+  file: string;
+  type: "stale-reference" | "missing-doc" | "broken-link" | "outdated-example";
+  message: string;
+}
+
+export interface DocValidationResult {
+  taskId: string;
+  passed: boolean;
+  issues: DocIssue[];
+}
+
+// --- Quality Score ---
+
+export interface QualityScoreBreakdown {
+  eval: number;
+  ci: number;
+  lint: number;
+  architecture: number;
+  docs: number;
+}
+
+export interface QualityScore {
+  taskId: string;
+  overall: number;
+  breakdown: QualityScoreBreakdown;
+  timestamp: string;
+}
+
+// --- GC Sweep ---
+
+export interface GCSweepResult {
+  staleWorkspacesRemoved: number;
+  staleJobsPruned: number;
+  evalEntriesPruned: number;
+  freedPaths: string[];
+}
+
+// --- Bug Reproduction ---
+
+export interface BugReproResult {
+  taskId: string;
+  reproduced: boolean;
+  testFile: string | null;
+  error: string | null;
+  steps: string[];
+}
+
+// --- Reference Docs ---
+
+export interface ReferenceDoc {
+  id: string;
+  category: string;
+  title: string;
+  content: string;
+  addedAt: string;
+}
+
+// --- Task Continuation ---
+
+export interface TaskCheckpoint {
+  taskId: string;
+  checkpointId: string;
+  threadId: string;
+  timestamp: string;
+  description: string;
+}
