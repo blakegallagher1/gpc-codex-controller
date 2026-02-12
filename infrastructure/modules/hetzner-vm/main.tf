@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    hcloud = {
+      source = "hetznercloud/hcloud"
+    }
+  }
+}
+
 resource "hcloud_ssh_key" "this" {
   count      = var.ssh_public_key != "" ? 1 : 0
   name       = "${var.server_name}-ssh"

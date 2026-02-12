@@ -7,24 +7,24 @@ terraform {
   }
 }
 
-provider "render" {
-  api_key  = var.api_key
-  owner_id = var.owner_id
-}
-
 resource "render_web_service" "this" {
-  name = var.service_name
-  plan = var.plan
+  name   = var.service_name
+  plan   = var.plan
+  region = var.region
+
+  start_command = "npm start"
 
   runtime_source = {
-    repo_url   = var.repo_url
-    branch     = var.repo_branch
-    build_cmd  = "npm ci && npm run build"
-    start_cmd  = "npm start"
+    native_runtime = {
+      repo_url      = var.repo_url
+      branch        = var.repo_branch
+      build_command = "npm ci && npm run build"
+      runtime       = "node"
+    }
   }
 
   env_vars = {
-    CODEX_HOME = "/opt/render/project/.codex"
-    GITHUB_TOKEN = var.github_token
+    "CODEX_HOME"   = { value = "/opt/render/project/.codex" }
+    "GITHUB_TOKEN" = { value = var.github_token }
   }
 }

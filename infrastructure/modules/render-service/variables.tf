@@ -1,14 +1,3 @@
-variable "api_key" {
-  type        = string
-  sensitive   = true
-  description = "Render API key."
-}
-
-variable "owner_id" {
-  type        = string
-  description = "Render owner ID."
-}
-
 variable "service_name" {
   type        = string
   description = "Render service name."
@@ -27,6 +16,12 @@ variable "repo_branch" {
 variable "plan" {
   type        = string
   description = "Render plan slug."
+}
+
+variable "region" {
+  type        = string
+  description = "Render region for the service."
+  default     = "oregon"
 }
 
 variable "github_token" {
