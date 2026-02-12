@@ -156,7 +156,7 @@ async function main(): Promise<void> {
           command,
           bindHost,
           port,
-          routes: { health: "/healthz", rpc: "/rpc" },
+          routes: { health: "/healthz", rpc: "/rpc", mcp: "/mcp" },
           auth: bearerToken ? "bearer" : "none",
         }) + "\n",
       );

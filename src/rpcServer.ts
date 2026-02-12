@@ -2,6 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Controller } from "./controller.js";
+import { createMcpHandler, type JobRecord } from "./mcpServer.js";
 
 // We intentionally keep JSON-RPC payloads permissive and rely on JSON.stringify
 // at the boundary, rather than trying to perfectly model "JSON serializable" in TS.
@@ -179,19 +180,6 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
   }
 }
 
-type JobStatus = "queued" | "running" | "succeeded" | "failed";
-
-interface JobRecord {
-  jobId: string;
-  status: JobStatus;
-  method: string;
-  createdAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  result?: JsonValue;
-  error?: string;
-}
-
 function newJobId(): string {
   return `job_${crypto.randomBytes(12).toString("hex")}`;
 }
@@ -199,6 +187,7 @@ function newJobId(): string {
 export async function startRpcServer(options: RpcServerOptions): Promise<{ close: () => Promise<void> }> {
   const shutdownGraceMs = options.shutdownGraceMs ?? 5_000;
   const jobs = new Map<string, JobRecord>();
+  const mcpHandler = createMcpHandler(options.controller, jobs);
 
   const startJob = (method: string, fn: () => Promise<JsonValue>): JobRecord => {
     const job: JobRecord = {
@@ -233,6 +222,13 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
       if (req.method === "GET" && (req.url === "/" || req.url === "/healthz")) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // MCP Streamable HTTP — no bearer auth (CF Access secures the path;
+      // ChatGPT Apps connect without bearer tokens in "No Auth" mode).
+      if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
+        await mcpHandler(req, res);
         return;
       }
 
