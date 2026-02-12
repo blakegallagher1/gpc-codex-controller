@@ -8,13 +8,17 @@ users:
     groups: [sudo]
     shell: /bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
+%{ if ssh_public_key != "" ~}
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+%{ endif ~}
 
 write_files:
   - path: /etc/default/gpc-codex-controller
     owner: root:root
     permissions: "0640"
     content: |
-      ${controller_env_lines}
+${indent(6, controller_env_lines)}
 
   - path: /etc/default/cloudflared
     owner: root:root

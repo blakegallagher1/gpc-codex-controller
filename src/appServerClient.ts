@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { once } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
+  type CompactStartParams,
+  type CompactStartResult,
   type InitializeParams,
   type InitializeResult,
   type JsonRpcId,
@@ -131,6 +133,10 @@ export class AppServerClient extends EventEmitter {
 
   public async startTurn(params: TurnStartParams): Promise<TurnStartResult> {
     return this.request<TurnStartResult>("turn/start", params);
+  }
+
+  public async compactThread(threadId: string): Promise<CompactStartResult> {
+    return this.request<CompactStartResult>("thread/compact/start", { threadId } satisfies CompactStartParams);
   }
 
   public async request<TResult, TParams = unknown>(method: string, params?: TParams): Promise<TResult> {

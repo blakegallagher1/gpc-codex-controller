@@ -197,4 +197,55 @@ export interface RunMutationResult {
   prUrl: string;
   iterations: number;
   success: boolean;
+  evalScore?: number;
+}
+
+// --- Compaction ---
+
+export interface CompactStartParams {
+  threadId: string;
+}
+
+export interface CompactStartResult {
+  status: string;
+}
+
+// --- Parallel Task Execution ---
+
+export interface ParallelTaskRequest {
+  taskId: string;
+  featureDescription: string;
+}
+
+export interface ParallelTaskResult {
+  taskId: string;
+  success: boolean;
+  result?: RunMutationResult;
+  error?: string;
+}
+
+export interface ParallelRunResult {
+  totalTasks: number;
+  succeeded: number;
+  failed: number;
+  results: ParallelTaskResult[];
+}
+
+// --- Doc Gardening ---
+
+export interface DocGardenResult {
+  taskId: string;
+  threadId: string;
+  turnId: string;
+  status: string;
+}
+
+// --- Eval ---
+
+export interface EvalSummary {
+  taskId: string;
+  overallScore: number;
+  passed: boolean;
+  checkCount: number;
+  passedCount: number;
 }

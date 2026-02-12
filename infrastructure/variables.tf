@@ -52,9 +52,9 @@ variable "location" {
 }
 
 variable "server_type" {
-  description = "Hetzner server type (2 vCPU / 4GB: cpx11)."
+  description = "Hetzner server type (3 vCPU / 8GB: cpx21)."
   type        = string
-  default     = "cpx11"
+  default     = "cpx21"
 }
 
 variable "image" {
@@ -135,6 +135,24 @@ variable "mcp_bearer_token" {
   type        = string
   sensitive   = true
   default     = ""
+}
+
+variable "enable_access" {
+  description = "Enable Cloudflare Zero Trust Access policy on the tunnel hostname."
+  type        = bool
+  default     = true
+}
+
+variable "access_allowed_emails" {
+  description = "Email addresses allowed through Access (used for browser-based access)."
+  type        = list(string)
+  default     = []
+}
+
+variable "access_service_token_name" {
+  description = "Name for the Access service token used by automated clients."
+  type        = string
+  default     = "gpc-codex-controller-api"
 }
 
 variable "enable_render" {

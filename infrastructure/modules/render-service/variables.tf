@@ -1,3 +1,9 @@
+variable "enabled" {
+  type        = bool
+  description = "Whether to create Render resources."
+  default     = false
+}
+
 variable "api_key" {
   type        = string
   sensitive   = true

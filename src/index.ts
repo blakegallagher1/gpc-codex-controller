@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   const cli = values as unknown as CliOptions;
   const command = positionals[0];
   if (!command) {
-    throw new Error("Missing command. Use one of: serve, start, continue, verify, fix, pr");
+    throw new Error("Missing command. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel");
   }
 
   const workspacePath = resolve(cli.workspace);
@@ -248,8 +248,91 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ ok: true, command, taskId: cli.taskId, prUrl }));
       break;
     }
+    case "mutate": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("mutate requires --taskId");
+      }
+      if (!cli.prompt || cli.prompt.trim().length === 0) {
+        throw new Error("mutate requires --prompt (feature description)");
+      }
+
+      const result = await controller.runMutation(cli.taskId, cli.prompt);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: result.taskId,
+          branch: result.branch,
+          prUrl: result.prUrl,
+          iterations: result.iterations,
+          success: result.success,
+          evalScore: result.evalScore,
+        }),
+      );
+      break;
+    }
+    case "eval": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("eval requires --taskId");
+      }
+
+      const result = await controller.runEval(cli.taskId);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          taskId: cli.taskId,
+          overallScore: result.overallScore,
+          passed: result.passed,
+          checks: result.checks.map((c) => ({ name: c.name, passed: c.passed, score: c.score })),
+        }),
+      );
+      break;
+    }
+    case "garden": {
+      if (!cli.taskId || cli.taskId.trim().length === 0) {
+        throw new Error("garden requires --taskId");
+      }
+
+      const result = await controller.runDocGardening(cli.taskId);
+      console.log(JSON.stringify({ ok: true, command, ...result }));
+      break;
+    }
+    case "parallel": {
+      // Parallel mode reads tasks from stdin as JSON: [{ "taskId": "...", "featureDescription": "..." }, ...]
+      const stdinChunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        stdinChunks.push(chunk as Buffer);
+      }
+      const stdinText = Buffer.concat(stdinChunks).toString("utf8").trim();
+      if (stdinText.length === 0) {
+        throw new Error("parallel requires JSON array of tasks on stdin");
+      }
+
+      const tasks = JSON.parse(stdinText) as Array<{ taskId: string; featureDescription: string }>;
+      if (!Array.isArray(tasks) || tasks.length === 0) {
+        throw new Error("parallel requires a non-empty JSON array of { taskId, featureDescription }");
+      }
+
+      const result = await controller.runParallel(tasks);
+      console.log(
+        JSON.stringify({
+          ok: true,
+          command,
+          totalTasks: result.totalTasks,
+          succeeded: result.succeeded,
+          failed: result.failed,
+          results: result.results.map((r) => ({
+            taskId: r.taskId,
+            success: r.success,
+            error: r.error,
+          })),
+        }),
+      );
+      break;
+    }
     default:
-      throw new Error(`Unsupported command: ${command}. Use one of: start, continue, verify, fix, pr`);
+      throw new Error(`Unsupported command: ${command}. Use one of: serve, start, continue, verify, fix, pr, mutate, eval, garden, parallel`);
   }
 
   await shutdown();

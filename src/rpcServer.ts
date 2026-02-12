@@ -120,6 +120,60 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       return { prUrl };
     }
 
+    case "mutation/run": {
+      const params = request.params as unknown as { taskId?: string; featureDescription?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) {
+        throw new Error("mutation/run requires params.taskId");
+      }
+      if (!params?.featureDescription || params.featureDescription.trim().length === 0) {
+        throw new Error("mutation/run requires params.featureDescription");
+      }
+      return await controller.runMutation(params.taskId, params.featureDescription);
+    }
+
+    case "eval/run": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) {
+        throw new Error("eval/run requires params.taskId");
+      }
+      return await controller.runEval(params.taskId);
+    }
+
+    case "eval/history": {
+      const params = request.params as unknown as { limit?: number } | undefined;
+      const limit = typeof params?.limit === "number" ? params.limit : undefined;
+      return await controller.getEvalHistory(limit);
+    }
+
+    case "eval/summary": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) {
+        throw new Error("eval/summary requires params.taskId");
+      }
+      return await controller.getEvalSummary(params.taskId);
+    }
+
+    case "memory/list": {
+      const params = request.params as unknown as { category?: string; limit?: number } | undefined;
+      return await controller.getMemoryEntries(params?.category, params?.limit);
+    }
+
+    case "garden/run": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) {
+        throw new Error("garden/run requires params.taskId");
+      }
+      return await controller.runDocGardening(params.taskId);
+    }
+
+    case "task/parallel": {
+      const params = request.params as unknown as { tasks?: Array<{ taskId: string; featureDescription: string }> };
+      if (!params?.tasks || !Array.isArray(params.tasks) || params.tasks.length === 0) {
+        throw new Error("task/parallel requires params.tasks (non-empty array)");
+      }
+      return await controller.runParallel(params.tasks);
+    }
+
     default:
       throw new Error(`Method not found: ${request.method}`);
   }
@@ -217,7 +271,15 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
         const typed = request as JsonRpcRequest;
 
         // For long-running controller operations, respond immediately with a jobId.
-        if (typed.method === "task/start" || typed.method === "task/continue" || typed.method === "fix/untilGreen") {
+        const asyncMethods = new Set([
+          "task/start",
+          "task/continue",
+          "fix/untilGreen",
+          "mutation/run",
+          "garden/run",
+          "task/parallel",
+        ]);
+        if (asyncMethods.has(typed.method)) {
           const job = startJob(typed.method, async () => handle(options.controller, typed));
           result = { accepted: true, jobId: job.jobId };
         } else if (typed.method === "job/get") {

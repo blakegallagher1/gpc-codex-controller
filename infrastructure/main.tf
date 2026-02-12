@@ -5,12 +5,12 @@ locals {
 
   controller_env = merge(
     {
-      CODEX_HOME              = var.codex_home
-      MCP_BIND                = "127.0.0.1"
-      MCP_PORT                = tostring(var.controller_port)
-      CONTROLLER_PORT         = tostring(var.controller_port)
+      CODEX_HOME               = var.codex_home
+      MCP_BIND                 = "127.0.0.1"
+      MCP_PORT                 = tostring(var.controller_port)
+      CONTROLLER_PORT          = tostring(var.controller_port)
       CONTROLLER_START_COMMAND = var.controller_start_command
-      MCP_BEARER_TOKEN        = var.mcp_bearer_token
+      MCP_BEARER_TOKEN         = var.mcp_bearer_token
     },
     var.github_token != "" ? { GITHUB_TOKEN = var.github_token } : {}
   )
@@ -34,14 +34,18 @@ locals {
 module "cloudflare_tunnel" {
   source = "./modules/cloudflare-tunnel"
 
-  name               = "${local.name_prefix}-tunnel"
-  account_id         = var.cloudflare_account_id
-  zone_id            = var.cloudflare_zone_id
-  hostname           = local.endpoint_hostname
-  dns_record_name    = var.subdomain
-  origin_host        = "127.0.0.1"
-  origin_port        = var.controller_port
+  name                = "${local.name_prefix}-tunnel"
+  account_id          = var.cloudflare_account_id
+  zone_id             = var.cloudflare_zone_id
+  hostname            = local.endpoint_hostname
+  dns_record_name     = var.subdomain
+  origin_host         = "127.0.0.1"
+  origin_port         = var.controller_port
   origin_bearer_token = var.mcp_bearer_token
+
+  enable_access             = var.enable_access
+  access_allowed_emails     = var.access_allowed_emails
+  access_service_token_name = var.access_service_token_name
 }
 
 module "hetzner_vm" {
@@ -51,14 +55,15 @@ module "hetzner_vm" {
   location          = var.location
   server_type       = var.server_type
   image             = var.image
-  ssh_public_key    = var.ssh_public_key
+  ssh_public_key    = trimspace(var.ssh_public_key)
   ssh_allowed_cidrs = var.ssh_allowed_cidrs
 
-  volume_name       = local.volume_name
-  volume_size_gb    = var.volume_size_gb
+  volume_name    = local.volume_name
+  volume_size_gb = var.volume_size_gb
 
   user_data = templatefile("${path.module}/cloud-init/controller-cloud-init.tftpl", {
     controller_user          = var.controller_user
+    ssh_public_key           = trimspace(var.ssh_public_key)
     codex_home               = var.codex_home
     controller_repo_url      = var.controller_repo_url
     controller_repo_branch   = var.controller_repo_branch
@@ -70,18 +75,4 @@ module "hetzner_vm" {
     cloudflared_tunnel_token = module.cloudflare_tunnel.tunnel_token
     endpoint_hostname        = local.endpoint_hostname
   })
-}
-
-module "render_service" {
-  count = var.enable_render ? 1 : 0
-
-  source = "./modules/render-service"
-
-  api_key         = var.render_api_key
-  owner_id        = var.render_owner_id
-  service_name    = var.render_service_name
-  repo_url        = var.controller_repo_url
-  repo_branch     = var.controller_repo_branch
-  plan            = var.render_plan
-  github_token    = var.github_token
 }

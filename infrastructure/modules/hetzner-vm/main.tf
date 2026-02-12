@@ -1,7 +1,15 @@
+terraform {
+  required_providers {
+    hcloud = {
+      source = "hetznercloud/hcloud"
+    }
+  }
+}
+
 resource "hcloud_ssh_key" "this" {
-  count      = var.ssh_public_key != "" ? 1 : 0
+  count      = trimspace(var.ssh_public_key) != "" ? 1 : 0
   name       = "${var.server_name}-ssh"
-  public_key = var.ssh_public_key
+  public_key = trimspace(var.ssh_public_key)
 }
 
 resource "hcloud_firewall" "this" {
@@ -42,7 +50,7 @@ resource "hcloud_server" "this" {
   location    = var.location
   user_data   = var.user_data
 
-  ssh_keys = var.ssh_public_key != "" ? [hcloud_ssh_key.this[0].name] : []
+  ssh_keys = trimspace(var.ssh_public_key) != "" ? [hcloud_ssh_key.this[0].name] : []
 
   public_net {
     ipv4_enabled = true
