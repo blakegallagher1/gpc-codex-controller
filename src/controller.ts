@@ -23,6 +23,7 @@ import { ArtifactManager } from "./artifactManager.js";
 import { NetworkPolicyManager } from "./networkPolicyManager.js";
 import { DomainSecretsManager } from "./domainSecretsManager.js";
 import { CompactionManager } from "./compactionManager.js";
+import { ShellToolManager } from "./shellToolManager.js";
 import type {
   ApprovalPolicy,
   AppBootResult,
@@ -71,6 +72,11 @@ import type {
   SecretInjectionResult,
   CompactionConfig,
   CompactionEvent,
+  CommandAuditEntry,
+  CommandExecutionPolicy,
+  ShellExecutionMetrics,
+  ShellExecutionResult,
+  ShellToolConfig,
 } from "./types.js";
 import { GitManager } from "./gitManager.js";
 import { TaskRegistry } from "./taskRegistry.js";
@@ -137,6 +143,7 @@ export class Controller extends EventEmitter {
   private readonly networkPolicyManager: NetworkPolicyManager;
   private readonly domainSecretsManager: DomainSecretsManager;
   private readonly compactionManager: CompactionManager;
+  private readonly shellToolManager: ShellToolManager;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -202,6 +209,15 @@ export class Controller extends EventEmitter {
     this.compactionManager = new CompactionManager(
       `${stateDir}/compaction-history.json`,
       this.appServerClient,
+    );
+
+    // Shell tool integration
+    this.shellToolManager = new ShellToolManager(
+      this.workspaceManager,
+      stateDir,
+      {
+        enabled: process.env.SHELL_TOOL_ENABLED !== "false",
+      },
     );
   }
 
@@ -1578,5 +1594,51 @@ export class Controller extends EventEmitter {
       failed: tasks.length - succeeded,
       results,
     };
+  }
+
+  // --- Shell Tool Integration ---
+
+  public async executeShellCommand(
+    taskId: string,
+    command: string[],
+    options?: { timeoutMs?: number; allowNonZeroExit?: boolean },
+  ): Promise<ShellExecutionResult> {
+    return this.shellToolManager.executeCommand(taskId, command, options);
+  }
+
+  public async setShellPolicy(policy: CommandExecutionPolicy): Promise<CommandExecutionPolicy> {
+    return this.shellToolManager.setTaskPolicy(policy);
+  }
+
+  public async getShellPolicy(taskId: string): Promise<CommandExecutionPolicy | null> {
+    return this.shellToolManager.getTaskPolicy(taskId);
+  }
+
+  public async removeShellPolicy(taskId: string): Promise<boolean> {
+    return this.shellToolManager.removeTaskPolicy(taskId);
+  }
+
+  public async listShellPolicies(): Promise<CommandExecutionPolicy[]> {
+    return this.shellToolManager.listPolicies();
+  }
+
+  public async getShellAuditLog(taskId?: string, limit?: number): Promise<CommandAuditEntry[]> {
+    return this.shellToolManager.getAuditLog(taskId, limit);
+  }
+
+  public async getShellMetrics(taskId?: string): Promise<ShellExecutionMetrics> {
+    return this.shellToolManager.getMetrics(taskId);
+  }
+
+  public getShellConfig(): ShellToolConfig {
+    return this.shellToolManager.getConfig();
+  }
+
+  public isShellEnabled(): boolean {
+    return this.shellToolManager.isEnabled();
+  }
+
+  public async clearShellAuditLog(): Promise<void> {
+    return this.shellToolManager.clearAuditLog();
   }
 }

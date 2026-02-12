@@ -384,6 +384,71 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       return controller.getContextUsage(params.threadId);
     }
 
+    // --- Shell Tool Integration ---
+    case "shell/execute": {
+      const params = request.params as unknown as { taskId?: string; command?: string[]; timeoutMs?: number; allowNonZeroExit?: boolean };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("shell/execute requires params.taskId");
+      if (!params?.command || !Array.isArray(params.command) || params.command.length === 0) throw new Error("shell/execute requires params.command (non-empty array)");
+      const opts: { timeoutMs?: number; allowNonZeroExit?: boolean } = {};
+      if (params.timeoutMs !== undefined) opts.timeoutMs = params.timeoutMs;
+      if (params.allowNonZeroExit !== undefined) opts.allowNonZeroExit = params.allowNonZeroExit;
+      return await controller.executeShellCommand(params.taskId, params.command, opts);
+    }
+
+    case "shell/setPolicy": {
+      const params = request.params as unknown as {
+        taskId?: string; allowedBinaries?: string[]; deniedBinaries?: string[];
+        deniedPatterns?: string[]; maxConcurrent?: number; timeoutMs?: number; maxOutputBytes?: number;
+      };
+      if (!params?.taskId) throw new Error("shell/setPolicy requires params.taskId");
+      return await controller.setShellPolicy({
+        taskId: params.taskId,
+        allowedBinaries: params.allowedBinaries ?? [],
+        deniedBinaries: params.deniedBinaries ?? [],
+        deniedPatterns: params.deniedPatterns ?? [],
+        maxConcurrent: params.maxConcurrent ?? 5,
+        timeoutMs: params.timeoutMs ?? 120000,
+        maxOutputBytes: params.maxOutputBytes ?? 2 * 1024 * 1024,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    case "shell/getPolicy": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId) throw new Error("shell/getPolicy requires params.taskId");
+      return await controller.getShellPolicy(params.taskId);
+    }
+
+    case "shell/removePolicy": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId) throw new Error("shell/removePolicy requires params.taskId");
+      return { removed: await controller.removeShellPolicy(params.taskId) };
+    }
+
+    case "shell/listPolicies":
+      return await controller.listShellPolicies();
+
+    case "shell/auditLog": {
+      const params = request.params as unknown as { taskId?: string; limit?: number };
+      return await controller.getShellAuditLog(params?.taskId, params?.limit);
+    }
+
+    case "shell/metrics": {
+      const params = request.params as unknown as { taskId?: string };
+      return await controller.getShellMetrics(params?.taskId);
+    }
+
+    case "shell/config":
+      return controller.getShellConfig();
+
+    case "shell/enabled":
+      return { enabled: controller.isShellEnabled() };
+
+    case "shell/clearAudit":
+      await controller.clearShellAuditLog();
+      return { ok: true };
+
     default:
       throw new Error(`Method not found: ${request.method}`);
   }
@@ -486,6 +551,7 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
           "review/loop",
           "app/boot",
           "bug/reproduce",
+          "shell/execute",
         ]);
         if (asyncMethods.has(typed.method)) {
           const job = startJob(typed.method, async () => handle(options.controller, typed));

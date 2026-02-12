@@ -188,6 +188,26 @@ export CLOUDFLARE_ZONE_ID="..."
 
 ---
 
+### 6) **Shell Command Execution Agent**
+
+**Purpose:**
+Provides a unified, safety-first shell command execution gateway for all workspace operations.
+
+**Safety controls:**
+- Binary allowlist: `pnpm`, `node`, `git`, `npx`, `bash` (extensible per-task)
+- Pattern denylist: blocks destructive commands (`rm -rf /`, `mkfs`, `dd`, fork bombs)
+- Concurrency limits: 10 global, 5 per-task (configurable)
+- Per-command timeout: 120s default, configurable up to 600s
+- Structured audit trail with FIFO eviction
+
+**Invoked via:**
+MCP tools (`execute_shell_command`, `set_shell_policy`, etc.) or RPC methods (`shell/execute`, `shell/setPolicy`, etc.).
+
+**Feature flag:**
+Set `SHELL_TOOL_ENABLED=false` to disable all shell-related MCP tools and RPC methods.
+
+---
+
 ## 🧪 Testing Agents
 
 You can test each agent independently using controller CLI or programmatic APIs:

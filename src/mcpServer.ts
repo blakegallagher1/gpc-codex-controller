@@ -566,6 +566,116 @@ export function createMcpHandler(
   );
 
   /* ================================================================ */
+  /*  Shell Tool Integration                                           */
+  /* ================================================================ */
+
+  mcp.tool(
+    "execute_shell_command",
+    "Execute a shell command in a task workspace with full safety controls (allowlist, denylist, audit). Returns a jobId.",
+    {
+      taskId: z.string().describe("Task ID (workspace to execute in)"),
+      command: z.array(z.string()).min(1).describe("Command tokens (e.g., ['pnpm', 'verify'])"),
+      timeoutMs: z.number().int().min(1000).max(600000).optional().describe("Command timeout in ms (default: 120000)"),
+      allowNonZeroExit: z.boolean().optional().default(true).describe("If true, non-zero exit doesn't throw"),
+    },
+    async ({ taskId, command, timeoutMs, allowNonZeroExit }) => {
+      const opts: { timeoutMs?: number; allowNonZeroExit?: boolean } = {};
+      if (timeoutMs !== undefined) opts.timeoutMs = timeoutMs;
+      if (allowNonZeroExit !== undefined) opts.allowNonZeroExit = allowNonZeroExit;
+      return textResult(enqueue("shell/execute", () =>
+        controller.executeShellCommand(taskId, command, opts),
+      ));
+    },
+  );
+
+  mcp.tool(
+    "set_shell_policy",
+    "Set a per-task command execution policy (allowlist extensions, denylist, concurrency, timeout).",
+    {
+      taskId: z.string().describe("Task ID"),
+      allowedBinaries: z.array(z.string()).default([]).describe("Additional allowed binaries beyond global"),
+      deniedBinaries: z.array(z.string()).default([]).describe("Explicitly denied binaries for this task"),
+      deniedPatterns: z.array(z.string()).default([]).describe("Regex patterns to block"),
+      maxConcurrent: z.number().int().min(1).max(20).default(5).describe("Max concurrent commands"),
+      timeoutMs: z.number().int().min(1000).max(600000).default(120000).describe("Default timeout per command"),
+    },
+    async ({ taskId, allowedBinaries, deniedBinaries, deniedPatterns, maxConcurrent, timeoutMs }) =>
+      textResult(await controller.setShellPolicy({
+        taskId,
+        allowedBinaries,
+        deniedBinaries,
+        deniedPatterns,
+        maxConcurrent,
+        timeoutMs,
+        maxOutputBytes: 2 * 1024 * 1024,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })),
+  );
+
+  mcp.tool(
+    "get_shell_policy",
+    "Get the execution policy for a task.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getShellPolicy(taskId)),
+  );
+
+  mcp.tool(
+    "remove_shell_policy",
+    "Remove a task's execution policy (revert to global defaults).",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult({ removed: await controller.removeShellPolicy(taskId) }),
+  );
+
+  mcp.tool(
+    "list_shell_policies",
+    "List all per-task execution policies.",
+    {},
+    async () => textResult(await controller.listShellPolicies()),
+  );
+
+  mcp.tool(
+    "get_shell_audit_log",
+    "Get recent command execution audit entries.",
+    {
+      taskId: z.string().optional().describe("Filter by task ID"),
+      limit: z.number().int().min(1).max(500).default(50).describe("Max entries"),
+    },
+    async ({ taskId, limit }) => textResult(await controller.getShellAuditLog(taskId, limit)),
+  );
+
+  mcp.tool(
+    "get_shell_metrics",
+    "Get command execution metrics (success/fail rates, durations, frequency).",
+    { taskId: z.string().optional().describe("Filter by task ID") },
+    async ({ taskId }) => textResult(await controller.getShellMetrics(taskId)),
+  );
+
+  mcp.tool(
+    "get_shell_config",
+    "Get the current shell tool configuration (feature flag, deny patterns, limits).",
+    {},
+    async () => textResult(controller.getShellConfig()),
+  );
+
+  mcp.tool(
+    "is_shell_enabled",
+    "Check if the shell tool feature is enabled.",
+    {},
+    async () => textResult({ enabled: controller.isShellEnabled() }),
+  );
+
+  mcp.tool(
+    "clear_shell_audit",
+    "Clear all command audit log entries.",
+    {},
+    async () => {
+      await controller.clearShellAuditLog();
+      return textResult({ ok: true });
+    },
+  );
+
+  /* ================================================================ */
   /*  Request handler                                                  */
   /* ================================================================ */
 

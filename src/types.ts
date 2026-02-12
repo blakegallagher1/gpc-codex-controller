@@ -540,3 +540,63 @@ export interface CompactionEvent {
   estimatedTokensAfter: number;
   turnNumber: number;
 }
+
+// --- Shell Tool Integration ---
+
+export type CommandExecutionState = "pending" | "running" | "succeeded" | "failed" | "killed";
+
+export interface CommandAuditEntry {
+  id: string;
+  taskId: string;
+  command: readonly string[];
+  cwd: string;
+  state: CommandExecutionState;
+  exitCode: number | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  stdoutBytes: number;
+  stderrBytes: number;
+  error: string | null;
+}
+
+export interface CommandExecutionPolicy {
+  taskId: string;
+  allowedBinaries: string[];  // extends global allowlist for this task
+  deniedBinaries: string[];   // explicit denylist for this task
+  deniedPatterns: string[];   // regex patterns to block (e.g., "rm -rf")
+  maxConcurrent: number;      // max concurrent commands per task
+  timeoutMs: number;          // per-command timeout
+  maxOutputBytes: number;     // per-stream output limit
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShellExecutionResult {
+  command: readonly string[];
+  cwd: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  killed: boolean;
+  auditId: string;
+}
+
+export interface ShellExecutionMetrics {
+  totalCommands: number;
+  succeededCommands: number;
+  failedCommands: number;
+  killedCommands: number;
+  avgDurationMs: number;
+  totalDurationMs: number;
+  commandFrequency: Record<string, number>; // binary → count
+}
+
+export interface ShellToolConfig {
+  enabled: boolean;           // SHELL_TOOL_ENABLED feature flag
+  globalDenyPatterns: string[]; // patterns denied across all tasks
+  defaultTimeoutMs: number;   // default per-command timeout
+  maxAuditEntries: number;    // FIFO eviction threshold
+  maxConcurrentGlobal: number; // global concurrent command limit
+}
