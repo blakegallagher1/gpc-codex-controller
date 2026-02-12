@@ -131,6 +131,14 @@ export class AutonomousOrchestrator {
         const phaseStart = Date.now();
 
         await this.controller.updatePlanPhase(record.taskId, i, "in_progress");
+
+        // Ensure task is in a state that can transition to "mutating".
+        // After a previous phase's fix loop the task may still be "verifying" or "fixing".
+        try {
+          await this.controller.updateTaskStatus(record.taskId, "ready");
+        } catch {
+          // Already in a state that can reach "mutating" — proceed.
+        }
         await this.controller.updateTaskStatus(record.taskId, "mutating");
 
         const phaseResult: AutonomousPhaseResult = {
