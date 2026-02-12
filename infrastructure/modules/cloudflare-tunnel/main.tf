@@ -107,6 +107,38 @@ resource "cloudflare_zero_trust_access_application" "this" {
 }
 
 # ---------------------------------------------------------------------------
+# MCP path bypass — lets ChatGPT Apps reach /mcp without Access auth.
+# More-specific path takes precedence over the hostname-level application.
+# ---------------------------------------------------------------------------
+
+resource "cloudflare_zero_trust_access_policy" "mcp_bypass" {
+  count      = var.enable_access ? 1 : 0
+  account_id = var.account_id
+  name       = "${var.name}-mcp-bypass"
+  decision   = "bypass"
+
+  include = [
+    {
+      everyone = {}
+    }
+  ]
+}
+
+resource "cloudflare_zero_trust_access_application" "mcp" {
+  count      = var.enable_access ? 1 : 0
+  account_id = var.account_id
+  name       = "${var.name}-mcp-access"
+  domain     = "${var.hostname}/mcp"
+  type       = "self_hosted"
+
+  session_duration = "24h"
+
+  policies = [
+    { id = cloudflare_zero_trust_access_policy.mcp_bypass[0].id }
+  ]
+}
+
+# ---------------------------------------------------------------------------
 # DNS
 # ---------------------------------------------------------------------------
 
