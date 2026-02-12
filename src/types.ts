@@ -43,7 +43,9 @@ export function isJsonRpcFailure(message: JsonRpcResponse): message is JsonRpcFa
 }
 
 export function isJsonRpcRequest(message: JsonRpcMessage): message is JsonRpcRequest {
-  return "method" in message && "id" in message;
+  // Some servers include `"id": null` in notifications. In that case, treat it as a notification,
+  // otherwise we'll incorrectly respond with method-not-found and never emit the notification.
+  return "method" in message && "id" in message && (message as { id?: unknown }).id !== null;
 }
 
 export interface InitializeParams {
