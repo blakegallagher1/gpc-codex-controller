@@ -676,6 +676,48 @@ export function createMcpHandler(
   );
 
   /* ================================================================ */
+  /*  Autonomous Orchestration                                         */
+  /* ================================================================ */
+
+  mcp.tool(
+    "start_autonomous_run",
+    "Start a fully autonomous end-to-end coding task: plan -> implement -> test -> fix -> commit -> PR -> review. Returns a jobId — poll with get_job.",
+    {
+      objective: z.string().describe("High-level objective (e.g., 'Add user authentication with JWT tokens')"),
+      maxPhaseFixes: z.number().int().min(1).max(10).default(3).describe("Max fix iterations per phase"),
+      qualityThreshold: z.number().min(0).max(1).default(0).describe("Minimum quality score (0-1) to pass"),
+      autoCommit: z.boolean().default(true).describe("Auto-commit on success"),
+      autoPR: z.boolean().default(true).describe("Auto-create PR on success"),
+      autoReview: z.boolean().default(true).describe("Auto-run review loop on PR"),
+    },
+    async (params) =>
+      textResult(enqueue("autonomous/start", () =>
+        controller.startAutonomousRun(params),
+      )),
+  );
+
+  mcp.tool(
+    "get_autonomous_run",
+    "Get the status and results of an autonomous run.",
+    { runId: z.string().describe("Run ID from start_autonomous_run") },
+    async ({ runId }) => textResult(await controller.getAutonomousRun(runId)),
+  );
+
+  mcp.tool(
+    "list_autonomous_runs",
+    "List recent autonomous runs with status and results.",
+    { limit: z.number().int().min(1).max(50).default(20).describe("Max runs to return") },
+    async ({ limit }) => textResult(await controller.listAutonomousRuns(limit)),
+  );
+
+  mcp.tool(
+    "cancel_autonomous_run",
+    "Cancel an in-progress autonomous run.",
+    { runId: z.string().describe("Run ID to cancel") },
+    async ({ runId }) => textResult({ cancelled: await controller.cancelAutonomousRun(runId) }),
+  );
+
+  /* ================================================================ */
   /*  Request handler                                                  */
   /* ================================================================ */
 

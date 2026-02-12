@@ -208,6 +208,32 @@ Set `SHELL_TOOL_ENABLED=false` to disable all shell-related MCP tools and RPC me
 
 ---
 
+### 7) **Autonomous Orchestrator Agent**
+
+**Purpose:**
+Drives fully autonomous end-to-end coding workflows — from objective to merged PR — without human intervention. Composes all existing controller primitives (task management, workspace isolation, shell execution, CI tracking, PR review loops, execution plans, skill routing, quality scoring) into a self-directed multi-phase pipeline.
+
+**Workflow:**
+1. **Planning** — Creates task (workspace + branch + thread), generates execution plan
+2. **Execution** — For each phase: enriched prompt → Codex turn → verify → fix-until-green → checkpoint
+3. **Validation** — Composite quality scoring (eval + CI + lint + architecture + docs)
+4. **Commit** — Commits all accumulated changes
+5. **PR** — Opens GitHub pull request with phase results summary
+6. **Review** — Automated review loop (review + fix + re-review)
+
+**Key features:**
+- Multi-phase execution with accumulated context across phases
+- Cooperative cancellation (checked between phases)
+- Partial success handling (some phases can fail without aborting the run)
+- Quality threshold gating (configurable minimum score)
+- Full observability via run records with per-phase timing and error tracking
+
+**Invoked via:**
+MCP tool `start_autonomous_run` (returns jobId) or RPC method `autonomous/start`.
+Poll with `get_autonomous_run` / `autonomous/get`. Cancel with `cancel_autonomous_run` / `autonomous/cancel`.
+
+---
+
 ## 🧪 Testing Agents
 
 You can test each agent independently using controller CLI or programmatic APIs:

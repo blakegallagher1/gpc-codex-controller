@@ -449,6 +449,40 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       await controller.clearShellAuditLog();
       return { ok: true };
 
+    // --- Autonomous Orchestration ---
+    case "autonomous/start": {
+      const params = request.params as unknown as {
+        objective?: string; maxPhaseFixes?: number; qualityThreshold?: number;
+        autoCommit?: boolean; autoPR?: boolean; autoReview?: boolean;
+      };
+      if (!params?.objective || params.objective.trim().length === 0) throw new Error("autonomous/start requires params.objective");
+      return await controller.startAutonomousRun({
+        objective: params.objective,
+        maxPhaseFixes: params.maxPhaseFixes ?? 3,
+        qualityThreshold: params.qualityThreshold ?? 0,
+        autoCommit: params.autoCommit ?? true,
+        autoPR: params.autoPR ?? true,
+        autoReview: params.autoReview ?? true,
+      });
+    }
+
+    case "autonomous/get": {
+      const params = request.params as unknown as { runId?: string };
+      if (!params?.runId || params.runId.trim().length === 0) throw new Error("autonomous/get requires params.runId");
+      return await controller.getAutonomousRun(params.runId);
+    }
+
+    case "autonomous/list": {
+      const params = request.params as unknown as { limit?: number };
+      return await controller.listAutonomousRuns(params?.limit);
+    }
+
+    case "autonomous/cancel": {
+      const params = request.params as unknown as { runId?: string };
+      if (!params?.runId || params.runId.trim().length === 0) throw new Error("autonomous/cancel requires params.runId");
+      return { cancelled: await controller.cancelAutonomousRun(params.runId) };
+    }
+
     default:
       throw new Error(`Method not found: ${request.method}`);
   }
@@ -552,6 +586,7 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
           "app/boot",
           "bug/reproduce",
           "shell/execute",
+          "autonomous/start",
         ]);
         if (asyncMethods.has(typed.method)) {
           const job = startJob(typed.method, async () => handle(options.controller, typed));

@@ -600,3 +600,52 @@ export interface ShellToolConfig {
   maxAuditEntries: number;    // FIFO eviction threshold
   maxConcurrentGlobal: number; // global concurrent command limit
 }
+
+// --- Autonomous Orchestration ---
+
+export type AutonomousRunStatus =
+  | "planning"
+  | "executing"
+  | "validating"
+  | "committing"
+  | "reviewing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface AutonomousRunParams {
+  objective: string;
+  maxPhaseFixes: number;
+  qualityThreshold: number;
+  autoCommit: boolean;
+  autoPR: boolean;
+  autoReview: boolean;
+}
+
+export interface AutonomousPhaseResult {
+  phaseIndex: number;
+  phaseName: string;
+  status: "completed" | "failed" | "skipped";
+  turnId: string | null;
+  verifyPassed: boolean;
+  fixIterations: number;
+  durationMs: number;
+  error: string | null;
+}
+
+export interface AutonomousRunRecord {
+  runId: string;
+  taskId: string;
+  objective: string;
+  status: AutonomousRunStatus;
+  params: AutonomousRunParams;
+  phases: AutonomousPhaseResult[];
+  startedAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+  qualityScore: number | null;
+  commitHash: string | null;
+  prUrl: string | null;
+  reviewPassed: boolean | null;
+  error: string | null;
+}

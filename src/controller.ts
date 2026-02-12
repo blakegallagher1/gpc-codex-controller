@@ -24,6 +24,7 @@ import { NetworkPolicyManager } from "./networkPolicyManager.js";
 import { DomainSecretsManager } from "./domainSecretsManager.js";
 import { CompactionManager } from "./compactionManager.js";
 import { ShellToolManager } from "./shellToolManager.js";
+import { AutonomousOrchestrator } from "./autonomousOrchestrator.js";
 import type {
   ApprovalPolicy,
   AppBootResult,
@@ -77,6 +78,8 @@ import type {
   ShellExecutionMetrics,
   ShellExecutionResult,
   ShellToolConfig,
+  AutonomousRunParams,
+  AutonomousRunRecord,
 } from "./types.js";
 import { GitManager } from "./gitManager.js";
 import { TaskRegistry } from "./taskRegistry.js";
@@ -144,6 +147,7 @@ export class Controller extends EventEmitter {
   private readonly domainSecretsManager: DomainSecretsManager;
   private readonly compactionManager: CompactionManager;
   private readonly shellToolManager: ShellToolManager;
+  private readonly autonomousOrchestrator: AutonomousOrchestrator;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -218,6 +222,12 @@ export class Controller extends EventEmitter {
       {
         enabled: process.env.SHELL_TOOL_ENABLED !== "false",
       },
+    );
+
+    // Autonomous orchestrator
+    this.autonomousOrchestrator = new AutonomousOrchestrator(
+      this,
+      `${stateDir}/autonomous-runs.json`,
     );
   }
 
@@ -1640,5 +1650,39 @@ export class Controller extends EventEmitter {
 
   public async clearShellAuditLog(): Promise<void> {
     return this.shellToolManager.clearAuditLog();
+  }
+
+  // --- Autonomous Orchestration ---
+
+  public async startAutonomousRun(params: AutonomousRunParams): Promise<AutonomousRunRecord> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+    this.handleApprovalEvents();
+    return this.autonomousOrchestrator.startRun(params);
+  }
+
+  public async getAutonomousRun(runId: string): Promise<AutonomousRunRecord | null> {
+    return this.autonomousOrchestrator.getRun(runId);
+  }
+
+  public async listAutonomousRuns(limit?: number): Promise<AutonomousRunRecord[]> {
+    return this.autonomousOrchestrator.listRuns(limit);
+  }
+
+  public async cancelAutonomousRun(runId: string): Promise<boolean> {
+    return this.autonomousOrchestrator.cancelRun(runId);
+  }
+
+  public async commitAllChanges(taskId: string, message: string): Promise<boolean> {
+    return this.gitManager.commitAll(taskId, message);
+  }
+
+  public async prepareWorkspace(taskId: string): Promise<void> {
+    const task = await this.taskRegistry.getTask(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    await this.deployAgentsMd(task.workspacePath);
   }
 }
