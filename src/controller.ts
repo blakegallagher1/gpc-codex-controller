@@ -75,7 +75,10 @@ export class Controller extends EventEmitter {
     this.model = options.model ?? "gpt-5.2-codex";
     this.sandboxPolicy = options.sandboxPolicy ?? "workspace-write";
     this.approvalPolicy = options.approvalPolicy ?? "never";
-    this.loginTimeoutMs = options.loginTimeoutMs ?? 5 * 60_000;
+    // In production, device auth is typically done out-of-band via `codex login --device-auth`.
+    // The app-server may not emit `account/login/completed` for that path, so waiting minutes
+    // per request is undesirable. Keep this short and proceed if we don't hear back quickly.
+    this.loginTimeoutMs = options.loginTimeoutMs ?? 10_000;
     this.workspaceManager = options.workspaceManager ?? new WorkspaceManager();
     this.gitManager = options.gitManager ?? new GitManager(this.workspaceManager);
     this.taskRegistry = options.taskRegistry ?? new TaskRegistry(`${dirname(this.stateFilePath)}/tasks.json`);
