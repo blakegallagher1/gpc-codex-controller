@@ -439,3 +439,104 @@ export interface TaskCheckpoint {
   timestamp: string;
   description: string;
 }
+
+// --- Skill Routing ---
+
+export interface SkillRouteDecision {
+  skillName: string;
+  score: number; // 0–1 relevance score
+  reason: string;
+}
+
+export interface SkillRoutingResult {
+  selectedSkills: SkillRouteDecision[];
+  rejectedSkills: SkillRouteDecision[];
+  totalCandidates: number;
+}
+
+// --- Artifact Management ---
+
+export interface Artifact {
+  id: string;
+  taskId: string;
+  name: string;
+  type: "file" | "report" | "dataset" | "screenshot" | "log";
+  path: string; // absolute path in workspace
+  sizeBytes: number;
+  createdAt: string;
+  metadata: Record<string, string>;
+}
+
+export interface ArtifactCollectionResult {
+  taskId: string;
+  artifacts: Artifact[];
+  totalSizeBytes: number;
+  handoffPath: string; // the standardized collection directory
+}
+
+// --- Network Policy ---
+
+export interface NetworkAllowlistEntry {
+  domain: string;
+  ports?: number[] | undefined;
+  reason: string;
+}
+
+export interface OrgNetworkPolicy {
+  allowlist: NetworkAllowlistEntry[];
+  defaultDeny: boolean;
+  updatedAt: string;
+}
+
+export interface RequestNetworkPolicy {
+  taskId: string;
+  allowlist: NetworkAllowlistEntry[];
+  inheritOrg: boolean;
+}
+
+export interface NetworkPolicyValidation {
+  valid: boolean;
+  violations: string[];
+  effectiveAllowlist: NetworkAllowlistEntry[];
+}
+
+// --- Domain Secrets ---
+
+export interface DomainSecret {
+  domain: string;
+  headerName: string;
+  placeholder: string; // e.g. "$API_KEY" — what the model sees
+  // Real value is NEVER exposed to model or stored in state JSON.
+  envVar: string; // env var name that holds the real value at runtime
+}
+
+export interface DomainSecretsConfig {
+  secrets: DomainSecret[];
+  updatedAt: string;
+}
+
+export interface SecretInjectionResult {
+  domain: string;
+  injected: boolean;
+  headerName: string;
+  placeholder: string;
+}
+
+// --- Compaction (enhanced) ---
+
+export interface CompactionConfig {
+  strategy: "turn-interval" | "token-threshold" | "auto";
+  turnInterval: number; // for turn-interval strategy
+  tokenThreshold: number; // for token-threshold strategy
+  autoThresholdPercent: number; // for auto: compact when context is N% full
+  maxContextTokens: number; // model's context window size
+}
+
+export interface CompactionEvent {
+  threadId: string;
+  timestamp: string;
+  strategy: string;
+  estimatedTokensBefore: number;
+  estimatedTokensAfter: number;
+  turnNumber: number;
+}

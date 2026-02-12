@@ -427,6 +427,145 @@ export function createMcpHandler(
   );
 
   /* ================================================================ */
+  /*  Article-inspired tools: routing, artifacts, network, secrets     */
+  /* ================================================================ */
+
+  mcp.tool(
+    "route_skills",
+    "Dynamically select the best skills for a task based on description analysis.",
+    { description: z.string().describe("Task description to route skills for") },
+    async ({ description }) => textResult(await controller.routeSkills(description)),
+  );
+
+  mcp.tool(
+    "force_select_skills",
+    "Deterministically select specific skills by name (bypasses scoring).",
+    { skillNames: z.array(z.string()).describe("Skill names to force-select") },
+    async ({ skillNames }) => textResult(await controller.forceSelectSkills(skillNames)),
+  );
+
+  mcp.tool(
+    "collect_artifacts",
+    "Collect all artifacts from a task workspace into the handoff directory.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.collectArtifacts(taskId)),
+  );
+
+  mcp.tool(
+    "list_artifacts",
+    "List all registered artifacts for a task.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.getArtifacts(taskId)),
+  );
+
+  mcp.tool(
+    "register_artifact",
+    "Register a specific file as a task artifact.",
+    {
+      taskId: z.string().describe("Task ID"),
+      name: z.string().describe("Artifact name"),
+      path: z.string().describe("File path"),
+      type: z.enum(["file", "report", "dataset", "screenshot", "log"]).optional().describe("Artifact type"),
+    },
+    async ({ taskId, name, path, type }) =>
+      textResult(await controller.registerArtifact(taskId, name, path, type)),
+  );
+
+  mcp.tool(
+    "get_network_policy",
+    "Get the current org-level network allowlist.",
+    {},
+    async () => textResult(await controller.getNetworkPolicy()),
+  );
+
+  mcp.tool(
+    "add_network_domain",
+    "Add a domain to the org-level network allowlist.",
+    {
+      domain: z.string().describe("Domain to allow (e.g., api.example.com)"),
+      reason: z.string().default("").describe("Why this domain is needed"),
+    },
+    async ({ domain, reason }) =>
+      textResult(await controller.addNetworkDomain({ domain, reason })),
+  );
+
+  mcp.tool(
+    "remove_network_domain",
+    "Remove a domain from the org-level network allowlist.",
+    { domain: z.string().describe("Domain to remove") },
+    async ({ domain }) => textResult(await controller.removeNetworkDomain(domain)),
+  );
+
+  mcp.tool(
+    "register_domain_secret",
+    "Register a domain secret mapping (model sees placeholder, runtime injects real value).",
+    {
+      domain: z.string().describe("Domain this secret applies to"),
+      headerName: z.string().describe("HTTP header name (e.g., Authorization)"),
+      placeholder: z.string().describe("Placeholder the model sees (e.g., $API_KEY)"),
+      envVar: z.string().describe("Env var holding the real value"),
+    },
+    async (params) => {
+      await controller.registerDomainSecret(params);
+      return textResult({ ok: true });
+    },
+  );
+
+  mcp.tool(
+    "list_domain_secrets",
+    "List registered domain secrets (placeholders only, never real values).",
+    {},
+    async () => textResult(await controller.getDomainSecrets()),
+  );
+
+  mcp.tool(
+    "validate_domain_secrets",
+    "Check which domain secrets have env vars configured vs missing.",
+    {},
+    async () => textResult(await controller.validateDomainSecrets()),
+  );
+
+  mcp.tool(
+    "get_compaction_config",
+    "Get current compaction strategy configuration.",
+    {},
+    async () => textResult(controller.getCompactionConfig()),
+  );
+
+  mcp.tool(
+    "set_compaction_config",
+    "Update compaction strategy (auto, token-threshold, or turn-interval).",
+    {
+      strategy: z.enum(["auto", "token-threshold", "turn-interval"]).optional().describe("Compaction strategy"),
+      tokenThreshold: z.number().optional().describe("Token threshold for token-threshold strategy"),
+      autoThresholdPercent: z.number().optional().describe("Context % threshold for auto strategy"),
+      turnInterval: z.number().optional().describe("Turn interval for turn-interval strategy"),
+    },
+    async (params) => {
+      const cfg: Record<string, unknown> = {};
+      if (params.strategy !== undefined) cfg.strategy = params.strategy;
+      if (params.tokenThreshold !== undefined) cfg.tokenThreshold = params.tokenThreshold;
+      if (params.autoThresholdPercent !== undefined) cfg.autoThresholdPercent = params.autoThresholdPercent;
+      if (params.turnInterval !== undefined) cfg.turnInterval = params.turnInterval;
+      return textResult(controller.setCompactionConfig(cfg as Partial<import("./types.js").CompactionConfig>));
+    },
+  );
+
+  mcp.tool(
+    "get_context_usage",
+    "Get estimated context window usage for a thread.",
+    { threadId: z.string().describe("Thread ID") },
+    async ({ threadId }) => textResult(controller.getContextUsage(threadId)),
+  );
+
+  mcp.tool(
+    "get_compaction_history",
+    "Get compaction event history.",
+    { limit: z.number().optional().default(20).describe("Max events to return") },
+    async ({ limit }) => textResult(await controller.getCompactionHistory(limit)),
+  );
+
+  /* ================================================================ */
   /*  Request handler                                                  */
   /* ================================================================ */
 

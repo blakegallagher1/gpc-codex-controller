@@ -18,6 +18,11 @@ import { QualityScoreManager } from "./qualityScoreManager.js";
 import { BugReproductionManager } from "./bugReproductionManager.js";
 import { TaskContinuationManager } from "./taskContinuationManager.js";
 import { ReferenceDocManager } from "./referenceDocManager.js";
+import { SkillRouter } from "./skillRouter.js";
+import { ArtifactManager } from "./artifactManager.js";
+import { NetworkPolicyManager } from "./networkPolicyManager.js";
+import { DomainSecretsManager } from "./domainSecretsManager.js";
+import { CompactionManager } from "./compactionManager.js";
 import type {
   ApprovalPolicy,
   AppBootResult,
@@ -55,6 +60,17 @@ import type {
   TurnDiffUpdatedParams,
   VerifyResult,
   WorkspaceWriteTurnSandboxPolicy,
+  Artifact,
+  ArtifactCollectionResult,
+  SkillRoutingResult,
+  NetworkAllowlistEntry,
+  OrgNetworkPolicy,
+  RequestNetworkPolicy,
+  NetworkPolicyValidation,
+  DomainSecret,
+  SecretInjectionResult,
+  CompactionConfig,
+  CompactionEvent,
 } from "./types.js";
 import { GitManager } from "./gitManager.js";
 import { TaskRegistry } from "./taskRegistry.js";
@@ -85,7 +101,7 @@ const MAX_TURNS_PER_TASK = 5;
 const MAX_IDENTICAL_FIX_DIFFS = 3;
 const BLOCKED_ROOT_FILES = new Set(["package.json", "tsconfig.json", "eslint.config.mjs", "coordinator.ts"]);
 const DEFAULT_MAX_PARALLEL = 3;
-const COMPACTION_TURN_INTERVAL = 3;
+// Compaction is now handled by CompactionManager with strategy-based thresholds.
 
 export class Controller extends EventEmitter {
   private readonly workspacePath: string;
@@ -116,6 +132,11 @@ export class Controller extends EventEmitter {
   private readonly bugReproductionManager: BugReproductionManager;
   private readonly taskContinuationManager: TaskContinuationManager;
   private readonly referenceDocManager: ReferenceDocManager;
+  private readonly skillRouter: SkillRouter;
+  private readonly artifactManager: ArtifactManager;
+  private readonly networkPolicyManager: NetworkPolicyManager;
+  private readonly domainSecretsManager: DomainSecretsManager;
+  private readonly compactionManager: CompactionManager;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -124,7 +145,6 @@ export class Controller extends EventEmitter {
   private itemEventsBound = false;
   private approvalEventsBound = false;
   private readonly turnStartCountByTask = new Map<string, number>();
-  private readonly turnCountByThread = new Map<string, number>();
 
   public constructor(
     private readonly appServerClient: AppServerClient,
@@ -173,6 +193,16 @@ export class Controller extends EventEmitter {
     this.bugReproductionManager = new BugReproductionManager(this.workspaceManager, this.skillsManager);
     this.taskContinuationManager = new TaskContinuationManager(`${stateDir}/checkpoints.json`);
     this.referenceDocManager = new ReferenceDocManager(`${stateDir}/reference-docs.json`);
+
+    // Article-inspired capabilities
+    this.skillRouter = new SkillRouter(this.skillsManager);
+    this.artifactManager = new ArtifactManager(`${stateDir}/artifacts.json`, this.workspaceManager);
+    this.networkPolicyManager = new NetworkPolicyManager(`${stateDir}/network-policy.json`);
+    this.domainSecretsManager = new DomainSecretsManager(`${stateDir}/domain-secrets.json`);
+    this.compactionManager = new CompactionManager(
+      `${stateDir}/compaction-history.json`,
+      this.appServerClient,
+    );
   }
 
   public async bootstrap(): Promise<{ threadId: string }> {
@@ -1059,8 +1089,12 @@ export class Controller extends EventEmitter {
       throw new Error("buildMutationPrompt requires a non-empty featureDescription");
     }
 
-    const skillContext = await this.skillsManager.buildSkillContext(["mutation"]);
+    // Dynamic skill routing (article tip #1, #2, #7):
+    // Route skills based on task description instead of always loading "mutation"
+    const skillContext = await this.skillRouter.buildRoutedSkillContext(normalized);
     const memoryContext = await this.memoryManager.buildMemoryContext(["fix-pattern", "convention-violation"]);
+    const secretsContext = await this.domainSecretsManager.buildModelContext();
+    const referenceContext = await this.referenceDocManager.buildContext();
 
     const sections: string[] = [
       "Task: implement the requested feature in the gpc-cres monorepo with minimal, correct changes.",
@@ -1081,6 +1115,14 @@ export class Controller extends EventEmitter {
 
     if (memoryContext) {
       sections.push(memoryContext);
+    }
+
+    if (secretsContext) {
+      sections.push(secretsContext);
+    }
+
+    if (referenceContext) {
+      sections.push(referenceContext);
     }
 
     sections.push("", "Feature request:", normalized);
@@ -1198,21 +1240,99 @@ export class Controller extends EventEmitter {
     }
   }
 
-  // --- Compaction ---
+  // --- Compaction (token-aware) ---
 
-  private async compactIfNeeded(threadId: string): Promise<void> {
-    const count = (this.turnCountByThread.get(threadId) ?? 0) + 1;
-    this.turnCountByThread.set(threadId, count);
+  private async compactIfNeeded(threadId: string, promptText?: string): Promise<void> {
+    // Delegate to CompactionManager which uses strategy-based compaction
+    // (token-threshold, turn-interval, or auto) instead of naive every-N-turns
+    await this.compactionManager.trackAndCompactIfNeeded(
+      threadId,
+      promptText ?? "",
+    );
+  }
 
-    if (count % COMPACTION_TURN_INTERVAL !== 0) {
-      return;
-    }
+  // --- Skill Routing ---
 
-    try {
-      await this.appServerClient.compactThread(threadId);
-    } catch {
-      // Compaction is best-effort; failures should not abort the workflow.
-    }
+  public async routeSkills(taskDescription: string): Promise<SkillRoutingResult> {
+    return this.skillRouter.route(taskDescription);
+  }
+
+  public async forceSelectSkills(skillNames: string[]): Promise<SkillRoutingResult> {
+    return this.skillRouter.forceSelect(skillNames);
+  }
+
+  // --- Artifact Management ---
+
+  public async registerArtifact(
+    taskId: string,
+    name: string,
+    path: string,
+    type?: Artifact["type"],
+    metadata?: Record<string, string>,
+  ): Promise<Artifact> {
+    return this.artifactManager.registerArtifact(taskId, name, path, type, metadata);
+  }
+
+  public async collectArtifacts(taskId: string): Promise<ArtifactCollectionResult> {
+    return this.artifactManager.collectFromWorkspace(taskId);
+  }
+
+  public async getArtifacts(taskId: string): Promise<Artifact[]> {
+    return this.artifactManager.getArtifacts(taskId);
+  }
+
+  // --- Network Policy ---
+
+  public async getNetworkPolicy(): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.getOrgPolicy();
+  }
+
+  public async setNetworkPolicy(allowlist: NetworkAllowlistEntry[]): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.setOrgPolicy(allowlist);
+  }
+
+  public async addNetworkDomain(entry: NetworkAllowlistEntry): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.addOrgDomain(entry);
+  }
+
+  public async removeNetworkDomain(domain: string): Promise<OrgNetworkPolicy> {
+    return this.networkPolicyManager.removeOrgDomain(domain);
+  }
+
+  public async validateRequestNetwork(policy: RequestNetworkPolicy): Promise<NetworkPolicyValidation> {
+    return this.networkPolicyManager.validateRequestPolicy(policy);
+  }
+
+  // --- Domain Secrets ---
+
+  public async registerDomainSecret(secret: DomainSecret): Promise<void> {
+    await this.domainSecretsManager.registerSecret(secret);
+  }
+
+  public async getDomainSecrets(): Promise<DomainSecret[]> {
+    return this.domainSecretsManager.getSecrets();
+  }
+
+  public async validateDomainSecrets(): Promise<SecretInjectionResult[]> {
+    return this.domainSecretsManager.validateSecrets();
+  }
+
+  // --- Compaction Config ---
+
+  public getCompactionConfig(): CompactionConfig {
+    return this.compactionManager.getConfig();
+  }
+
+  public setCompactionConfig(config: Partial<CompactionConfig>): CompactionConfig {
+    return this.compactionManager.setConfig(config);
+  }
+
+  public async getCompactionHistory(limit?: number): Promise<CompactionEvent[]> {
+    return this.compactionManager.getHistory(limit);
+  }
+
+  public getContextUsage(threadId: string): { estimatedTokens: number; maxTokens: number; percentUsed: number; turnCount: number } {
+    return this.compactionManager.getContextUsage(threadId);
   }
 
   // --- Eval ---

@@ -298,6 +298,92 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       return await controller.runParallel(params.tasks);
     }
 
+    // --- Skill Routing ---
+    case "skill/route": {
+      const params = request.params as unknown as { description?: string };
+      if (!params?.description) throw new Error("skill/route requires params.description");
+      return await controller.routeSkills(params.description);
+    }
+    case "skill/force": {
+      const params = request.params as unknown as { skillNames?: string[] };
+      if (!params?.skillNames || !Array.isArray(params.skillNames)) throw new Error("skill/force requires params.skillNames");
+      return await controller.forceSelectSkills(params.skillNames);
+    }
+
+    // --- Artifacts ---
+    case "artifact/register": {
+      const params = request.params as unknown as { taskId?: string; name?: string; path?: string; type?: string; metadata?: Record<string, string> };
+      if (!params?.taskId) throw new Error("artifact/register requires params.taskId");
+      if (!params?.name) throw new Error("artifact/register requires params.name");
+      if (!params?.path) throw new Error("artifact/register requires params.path");
+      return await controller.registerArtifact(params.taskId, params.name, params.path, params.type as "file" | "report" | "dataset" | "screenshot" | "log" | undefined, params.metadata);
+    }
+    case "artifact/collect": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId) throw new Error("artifact/collect requires params.taskId");
+      return await controller.collectArtifacts(params.taskId);
+    }
+    case "artifact/list": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId) throw new Error("artifact/list requires params.taskId");
+      return await controller.getArtifacts(params.taskId);
+    }
+
+    // --- Network Policy ---
+    case "network/getPolicy":
+      return await controller.getNetworkPolicy();
+    case "network/setPolicy": {
+      const params = request.params as unknown as { allowlist?: Array<{ domain: string; ports?: number[]; reason: string }> };
+      if (!params?.allowlist) throw new Error("network/setPolicy requires params.allowlist");
+      return await controller.setNetworkPolicy(params.allowlist);
+    }
+    case "network/addDomain": {
+      const params = request.params as unknown as { domain?: string; ports?: number[]; reason?: string };
+      if (!params?.domain) throw new Error("network/addDomain requires params.domain");
+      return await controller.addNetworkDomain({ domain: params.domain, ports: params.ports, reason: params.reason ?? "" });
+    }
+    case "network/removeDomain": {
+      const params = request.params as unknown as { domain?: string };
+      if (!params?.domain) throw new Error("network/removeDomain requires params.domain");
+      return await controller.removeNetworkDomain(params.domain);
+    }
+
+    // --- Domain Secrets ---
+    case "secret/register": {
+      const params = request.params as unknown as { domain?: string; headerName?: string; placeholder?: string; envVar?: string };
+      if (!params?.domain || !params?.headerName || !params?.placeholder || !params?.envVar) {
+        throw new Error("secret/register requires domain, headerName, placeholder, envVar");
+      }
+      await controller.registerDomainSecret({
+        domain: params.domain,
+        headerName: params.headerName,
+        placeholder: params.placeholder,
+        envVar: params.envVar,
+      });
+      return { ok: true };
+    }
+    case "secret/list":
+      return await controller.getDomainSecrets();
+    case "secret/validate":
+      return await controller.validateDomainSecrets();
+
+    // --- Compaction ---
+    case "compaction/config":
+      return controller.getCompactionConfig();
+    case "compaction/setConfig": {
+      const params = request.params as unknown as Record<string, unknown>;
+      return controller.setCompactionConfig(params as Record<string, unknown> & Partial<{ strategy: "turn-interval" | "token-threshold" | "auto" }>);
+    }
+    case "compaction/history": {
+      const params = request.params as unknown as { limit?: number };
+      return await controller.getCompactionHistory(params?.limit);
+    }
+    case "compaction/contextUsage": {
+      const params = request.params as unknown as { threadId?: string };
+      if (!params?.threadId) throw new Error("compaction/contextUsage requires params.threadId");
+      return controller.getContextUsage(params.threadId);
+    }
+
     default:
       throw new Error(`Method not found: ${request.method}`);
   }
