@@ -167,3 +167,9 @@ variable "render_plan" {
   type        = string
   default     = "starter"
 }
+
+variable "render_region" {
+  description = "Render region when enabled."
+  type        = string
+  default     = "oregon"
+}

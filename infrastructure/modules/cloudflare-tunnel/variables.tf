@@ -33,10 +33,3 @@ variable "origin_port" {
   type        = number
   description = "Origin service port for tunnel ingress."
 }
-
-variable "origin_bearer_token" {
-  type        = string
-  description = "Optional bearer token forwarded to origin in Authorization header."
-  default     = ""
-  sensitive   = true
-}
