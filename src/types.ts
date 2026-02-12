@@ -114,7 +114,7 @@ export interface TurnStartParams {
 
 export interface WorkspaceWriteTurnSandboxPolicy {
   // Must match codex app-server enum variants.
-  type: "workspace-write";
+  type: "workspaceWrite";
   writableRoots?: string[];
   networkAccess?: boolean;
   excludeTmpdirEnvVar?: boolean;
