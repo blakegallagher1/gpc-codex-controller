@@ -40,7 +40,7 @@ interface ControllerOptions {
 const VERIFY_JSON_FILENAME = ".agent-verify.json";
 const VERIFY_OUTPUT_TAIL_LINES = 120;
 const TURN_TIMEOUT_MS = 20 * 60_000;
-const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspaceWrite" };
+const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspace-write" };
 const MAX_TURNS_PER_TASK = 5;
 const MAX_IDENTICAL_FIX_DIFFS = 3;
 const BLOCKED_ROOT_FILES = new Set(["package.json", "tsconfig.json", "eslint.config.mjs", "coordinator.ts"]);
@@ -73,7 +73,7 @@ export class Controller extends EventEmitter {
     this.workspacePath = options.workspacePath;
     this.stateFilePath = options.stateFilePath;
     this.model = options.model ?? "gpt-5.2-codex";
-    this.sandboxPolicy = options.sandboxPolicy ?? "workspaceWrite";
+    this.sandboxPolicy = options.sandboxPolicy ?? "workspace-write";
     this.approvalPolicy = options.approvalPolicy ?? "never";
     this.loginTimeoutMs = options.loginTimeoutMs ?? 5 * 60_000;
     this.workspaceManager = options.workspaceManager ?? new WorkspaceManager();
