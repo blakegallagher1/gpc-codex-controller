@@ -1,0 +1,24 @@
+[Unit]
+Description=gpc-codex-controller service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${controller_user}
+Group=${controller_user}
+WorkingDirectory=/home/${controller_user}/gpc-codex-controller
+EnvironmentFile=/etc/default/gpc-codex-controller
+ExecStart=/usr/bin/env bash -lc '${controller_start_command}'
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/${controller_user}/gpc-codex-controller /home/${controller_user}/.codex /workspaces
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,38 @@
+# Required core inputs
+project_name          = "gpc-codex-controller"
+environment           = "prod"
+cloudflare_account_id = "<CLOUDFLARE_ACCOUNT_ID>"
+cloudflare_zone_id    = "<CLOUDFLARE_ZONE_ID>"
+domain                = "example.com"
+subdomain             = "codex-controller"
+
+# VM settings
+location              = "ash"
+server_type           = "cpx11"
+image                 = "ubuntu-24.04"
+controller_user       = "controller"
+volume_size_gb        = 200
+
+# Optional but recommended for SSH hardening
+ssh_public_key        = "ssh-ed25519 AAAA..."
+ssh_allowed_cidrs     = ["203.0.113.10/32"]
+
+# Controller deployment
+controller_repo_url      = "https://github.com/blakegallagher1/gpc-codex-controller"
+controller_repo_branch   = "main"
+controller_port          = 8787
+controller_start_command = "npm start"
+codex_home               = "/home/controller/.codex"
+
+# Secrets (prefer TF_VAR_* env vars; if populated here keep file out of git)
+hcloud_token          = "<HCLOUD_TOKEN>"
+cloudflare_api_token  = "<CLOUDFLARE_API_TOKEN>"
+github_token          = "<GITHUB_TOKEN>"
+mcp_bearer_token      = "<LONG_RANDOM_MCP_TOKEN>"
+
+# Optional Render deployment
+enable_render         = false
+render_api_key        = null
+render_owner_id       = null
+render_service_name   = "gpc-codex-controller"
+render_plan           = "starter"

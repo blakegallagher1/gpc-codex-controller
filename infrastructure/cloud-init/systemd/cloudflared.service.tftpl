@@ -1,0 +1,19 @@
+[Unit]
+Description=Cloudflare Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${controller_user}
+Group=${controller_user}
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token $${CLOUDFLARED_TUNNEL_TOKEN}
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/default/cloudflared
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

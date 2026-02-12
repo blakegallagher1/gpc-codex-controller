@@ -1,0 +1,59 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+users:
+  - default
+  - name: ${controller_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+
+write_files:
+  - path: /etc/default/gpc-codex-controller
+    owner: root:root
+    permissions: "0640"
+    content: |
+      ${controller_env_lines}
+
+  - path: /etc/default/cloudflared
+    owner: root:root
+    permissions: "0640"
+    content: |
+      CLOUDFLARED_TUNNEL_TOKEN=${cloudflared_tunnel_token}
+
+  - path: /etc/systemd/system/gpc-codex-controller.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+${indent(6, controller_service_unit)}
+
+  - path: /etc/systemd/system/cloudflared.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+${indent(6, cloudflared_service_unit)}
+
+runcmd:
+  - [bash, -lc, "apt-get update"]
+  - [bash, -lc, "apt-get install -y ca-certificates curl git jq build-essential"]
+  - [bash, -lc, "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"]
+  - [bash, -lc, "apt-get install -y nodejs"]
+  - [bash, -lc, "corepack enable"]
+  - [bash, -lc, "npm install -g @openai/codex"]
+  - [bash, -lc, "curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared"]
+  - [bash, -lc, "chmod +x /usr/local/bin/cloudflared"]
+  - [bash, -lc, "mkdir -p /home/${controller_user}/.codex /home/${controller_user}/gpc-codex-controller ${workspace_mount_point}"]
+  - [bash, -lc, "chown -R ${controller_user}:${controller_user} /home/${controller_user}/.codex /home/${controller_user}/gpc-codex-controller ${workspace_mount_point}"]
+  - [bash, -lc, "if ! blkid /dev/disk/by-id/scsi-0HC_Volume_${volume_name}; then mkfs.ext4 /dev/disk/by-id/scsi-0HC_Volume_${volume_name}; fi"]
+  - [bash, -lc, "grep -q '${workspace_mount_point}' /etc/fstab || echo '/dev/disk/by-id/scsi-0HC_Volume_${volume_name} ${workspace_mount_point} ext4 defaults,nofail 0 2' >> /etc/fstab"]
+  - [bash, -lc, "mount -a"]
+  - [bash, -lc, "chown -R ${controller_user}:${controller_user} ${workspace_mount_point}"]
+  - [bash, -lc, "su - ${controller_user} -c 'if [ ! -d /home/${controller_user}/gpc-codex-controller/.git ]; then git clone --branch ${controller_repo_branch} --single-branch ${controller_repo_url} /home/${controller_user}/gpc-codex-controller; else cd /home/${controller_user}/gpc-codex-controller && git fetch origin ${controller_repo_branch} && git checkout ${controller_repo_branch} && git pull --ff-only; fi'"]
+  - [bash, -lc, "su - ${controller_user} -c 'cd /home/${controller_user}/gpc-codex-controller && npm ci && npm run build'"]
+  - [bash, -lc, "systemctl daemon-reload"]
+  - [bash, -lc, "systemctl enable gpc-codex-controller cloudflared"]
+  - [bash, -lc, "systemctl restart gpc-codex-controller cloudflared"]
+  - [bash, -lc, "echo 'Complete ChatGPT login using: sudo -u ${controller_user} CODEX_HOME=${codex_home} codex login --chatgpt' > /etc/motd"]
+
+final_message: "cloud-init finished: controller deployed to https://${endpoint_hostname}"
