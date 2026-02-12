@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Controller } from "./controller.js";
 
@@ -124,8 +125,55 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
   }
 }
 
+type JobStatus = "queued" | "running" | "succeeded" | "failed";
+
+interface JobRecord {
+  jobId: string;
+  status: JobStatus;
+  method: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  result?: JsonValue;
+  error?: string;
+}
+
+function newJobId(): string {
+  return `job_${crypto.randomBytes(12).toString("hex")}`;
+}
+
 export async function startRpcServer(options: RpcServerOptions): Promise<{ close: () => Promise<void> }> {
   const shutdownGraceMs = options.shutdownGraceMs ?? 5_000;
+  const jobs = new Map<string, JobRecord>();
+
+  const startJob = (method: string, fn: () => Promise<JsonValue>): JobRecord => {
+    const job: JobRecord = {
+      jobId: newJobId(),
+      status: "queued",
+      method,
+      createdAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
+    jobs.set(job.jobId, job);
+
+    void (async () => {
+      job.status = "running";
+      job.startedAt = new Date().toISOString();
+      try {
+        job.result = await fn();
+        job.status = "succeeded";
+      } catch (error) {
+        job.error = error instanceof Error ? error.message : String(error);
+        job.status = "failed";
+      } finally {
+        job.finishedAt = new Date().toISOString();
+      }
+    })();
+
+    return job;
+  };
+
   const server = http.createServer(async (req, res) => {
     try {
       if (req.method === "GET" && (req.url === "/" || req.url === "/healthz")) {
@@ -166,7 +214,25 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
 
       let result: JsonValue;
       try {
-        result = await handle(options.controller, request as JsonRpcRequest);
+        const typed = request as JsonRpcRequest;
+
+        // For long-running controller operations, respond immediately with a jobId.
+        if (typed.method === "task/start" || typed.method === "task/continue" || typed.method === "fix/untilGreen") {
+          const job = startJob(typed.method, async () => handle(options.controller, typed));
+          result = { accepted: true, jobId: job.jobId };
+        } else if (typed.method === "job/get") {
+          const params = typed.params as unknown as { jobId?: string };
+          if (!params?.jobId || params.jobId.trim().length === 0) {
+            throw new Error("job/get requires params.jobId");
+          }
+          const job = jobs.get(params.jobId.trim());
+          if (!job) {
+            throw new Error(`Unknown jobId: ${params.jobId}`);
+          }
+          result = job;
+        } else {
+          result = await handle(options.controller, typed);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const response =
