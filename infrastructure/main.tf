@@ -34,13 +34,18 @@ locals {
 module "cloudflare_tunnel" {
   source = "./modules/cloudflare-tunnel"
 
-  name            = "${local.name_prefix}-tunnel"
-  account_id      = var.cloudflare_account_id
-  zone_id         = var.cloudflare_zone_id
-  hostname        = local.endpoint_hostname
-  dns_record_name = var.subdomain
-  origin_host     = "127.0.0.1"
-  origin_port     = var.controller_port
+  name                = "${local.name_prefix}-tunnel"
+  account_id          = var.cloudflare_account_id
+  zone_id             = var.cloudflare_zone_id
+  hostname            = local.endpoint_hostname
+  dns_record_name     = var.subdomain
+  origin_host         = "127.0.0.1"
+  origin_port         = var.controller_port
+  origin_bearer_token = var.mcp_bearer_token
+
+  enable_access             = var.enable_access
+  access_allowed_emails     = var.access_allowed_emails
+  access_service_token_name = var.access_service_token_name
 }
 
 module "hetzner_vm" {
@@ -50,7 +55,7 @@ module "hetzner_vm" {
   location          = var.location
   server_type       = var.server_type
   image             = var.image
-  ssh_public_key    = var.ssh_public_key
+  ssh_public_key    = trimspace(var.ssh_public_key)
   ssh_allowed_cidrs = var.ssh_allowed_cidrs
 
   volume_name    = local.volume_name
@@ -58,6 +63,7 @@ module "hetzner_vm" {
 
   user_data = templatefile("${path.module}/cloud-init/controller-cloud-init.tftpl", {
     controller_user          = var.controller_user
+    ssh_public_key           = trimspace(var.ssh_public_key)
     codex_home               = var.codex_home
     controller_repo_url      = var.controller_repo_url
     controller_repo_branch   = var.controller_repo_branch

@@ -28,3 +28,14 @@ output "cloudflared_tunnel_token" {
   value       = module.cloudflare_tunnel.tunnel_token
   sensitive   = true
 }
+
+output "access_service_token_client_id" {
+  description = "Access service token Client ID — pass as CF-Access-Client-Id header."
+  value       = module.cloudflare_tunnel.access_service_token_client_id
+}
+
+output "access_service_token_client_secret" {
+  description = "Access service token Client Secret — pass as CF-Access-Client-Secret header."
+  value       = module.cloudflare_tunnel.access_service_token_client_secret
+  sensitive   = true
+}

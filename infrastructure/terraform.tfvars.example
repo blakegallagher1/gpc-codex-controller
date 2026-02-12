@@ -8,7 +8,7 @@ subdomain             = "codex-controller"
 
 # VM settings
 location              = "ash"
-server_type           = "cpx11"
+server_type           = "cpx21"
 image                 = "ubuntu-24.04"
 controller_user       = "controller"
 volume_size_gb        = 200
@@ -29,6 +29,11 @@ hcloud_token          = "<HCLOUD_TOKEN>"
 cloudflare_api_token  = "<CLOUDFLARE_API_TOKEN>"
 github_token          = "<GITHUB_TOKEN>"
 mcp_bearer_token      = "<LONG_RANDOM_MCP_TOKEN>"
+
+# Zero Trust Access (enabled by default — protects tunnel at Cloudflare edge)
+enable_access             = true
+access_allowed_emails     = ["blake@gallagherpropco.com"]
+access_service_token_name = "gpc-codex-controller-api"
 
 # Optional Render deployment
 enable_render         = false
