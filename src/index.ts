@@ -150,7 +150,9 @@ async function main(): Promise<void> {
         ...(bearerToken && bearerToken.trim().length > 0 ? { bearerToken } : {}),
       });
 
-      const mcpEndpoint = `http://${bindHost}:${port}/rpc`;
+      const baseUrl = (process.env.MCP_BASE_URL ?? "").replace(/\/+$/, "");
+      const localBase = `http://${bindHost}:${port}`;
+      const mcpEndpoint = baseUrl ? `${baseUrl}/rpc` : `${localBase}/rpc`;
 
       process.stdout.write(
         JSON.stringify({
@@ -168,7 +170,10 @@ async function main(): Promise<void> {
       process.stderr.write(`  MCP server running.\n`);
       process.stderr.write(`\n`);
       process.stderr.write(`  ➜  MCP endpoint: ${mcpEndpoint}\n`);
-      process.stderr.write(`  ➜  Health check: http://${bindHost}:${port}/healthz\n`);
+      if (baseUrl) {
+        process.stderr.write(`  ➜  Local server: ${localBase}\n`);
+      }
+      process.stderr.write(`  ➜  Health check: ${baseUrl ? `${baseUrl}/healthz` : `${localBase}/healthz`}\n`);
       process.stderr.write(`\n`);
       process.stderr.write(`  Add the MCP endpoint URL above to ChatGPT under Settings → MCP / Tools.\n`);
       process.stderr.write(`\n`);
