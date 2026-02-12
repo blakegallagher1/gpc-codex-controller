@@ -1,0 +1,19 @@
+{
+  "name": "gpc-codex-controller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Production-grade controller for Codex app-server sessions against gpc-cres clones.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "start": "node --enable-source-maps dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3"
+  }
+}
