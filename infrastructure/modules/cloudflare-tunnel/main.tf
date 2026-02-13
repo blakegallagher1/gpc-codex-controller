@@ -9,6 +9,11 @@ terraform {
   }
 }
 
+moved {
+  from = cloudflare_dns_record.this
+  to   = cloudflare_dns_record.this[0]
+}
+
 resource "random_id" "tunnel_secret" {
   byte_length = 35
 }
@@ -17,6 +22,10 @@ resource "cloudflare_zero_trust_tunnel_cloudflared" "this" {
   account_id    = var.account_id
   name          = var.name
   tunnel_secret = random_id.tunnel_secret.b64_std
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 data "cloudflare_zero_trust_tunnel_cloudflared_token" "this" {
@@ -46,6 +55,10 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "this" {
       }
     ]
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -74,6 +87,10 @@ resource "cloudflare_zero_trust_access_policy" "service_token" {
       any_valid_service_token = {}
     }
   ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_policy" "email_allow" {
@@ -87,6 +104,10 @@ resource "cloudflare_zero_trust_access_policy" "email_allow" {
       email = email
     }
   }]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_application" "this" {
@@ -104,6 +125,10 @@ resource "cloudflare_zero_trust_access_application" "this" {
     ? [{ id = cloudflare_zero_trust_access_policy.email_allow[0].id }]
     : []
   )
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -122,6 +147,10 @@ resource "cloudflare_zero_trust_access_policy" "mcp_bypass" {
       everyone = {}
     }
   ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "cloudflare_zero_trust_access_application" "mcp" {
@@ -136,6 +165,10 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
   policies = [
     { id = cloudflare_zero_trust_access_policy.mcp_bypass[0].id }
   ]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -150,4 +183,8 @@ resource "cloudflare_dns_record" "this" {
   content = "${cloudflare_zero_trust_tunnel_cloudflared.this.id}.cfargotunnel.com"
   proxied = true
   ttl     = 1
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }

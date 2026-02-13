@@ -56,6 +56,12 @@ resource "hcloud_server" "this" {
     ipv4_enabled = true
     ipv6_enabled = true
   }
+
+  lifecycle {
+    ignore_changes = [
+      firewall_ids
+    ]
+  }
 }
 
 resource "hcloud_firewall_attachment" "this" {
