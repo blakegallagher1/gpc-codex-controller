@@ -159,6 +159,8 @@ export interface StartOrContinueTaskResult {
   threadId: string;
   turnId: string;
   status: string;
+  /** Captured agent output text (reasoning + command output) from the turn. */
+  output: string | undefined;
 }
 
 export interface VerifyResult {

@@ -148,14 +148,38 @@ export class ArtifactManager {
   private async scanForArtifacts(
     taskId: string,
     workspacePath: string,
-    handoffPath: string,
+    _handoffPath: string,
   ): Promise<Artifact[]> {
     const artifacts: Artifact[] = [];
 
+    // Prioritize _artifacts/ directory (auto-saved turn outputs live here)
+    const artifactsDir = join(workspacePath, ARTIFACT_DIR);
+    await this.scanDirectory(taskId, artifactsDir, artifacts);
+
+    // Also scan workspace root for any top-level artifact files
+    await this.scanDirectory(taskId, workspacePath, artifacts, false);
+
+    return artifacts;
+  }
+
+  private async scanDirectory(
+    taskId: string,
+    dirPath: string,
+    artifacts: Artifact[],
+    recursive = true,
+  ): Promise<void> {
     try {
-      const entries = await readdir(workspacePath, { withFileTypes: true });
+      const entries = await readdir(dirPath, { withFileTypes: true });
 
       for (const entry of entries) {
+        // Skip node_modules, .git, and other noise
+        if (entry.isDirectory()) {
+          if (recursive && !entry.name.startsWith(".") && entry.name !== "node_modules") {
+            await this.scanDirectory(taskId, join(dirPath, entry.name), artifacts, true);
+          }
+          continue;
+        }
+
         if (!entry.isFile()) {
           continue;
         }
@@ -166,24 +190,27 @@ export class ArtifactManager {
           continue;
         }
 
-        // Skip if already in artifact dir
-        const srcPath = join(workspacePath, entry.name);
+        const srcPath = join(dirPath, entry.name);
+
+        // Skip if already registered (avoid duplicates)
+        const alreadyRegistered = artifacts.some((a) => a.path === srcPath);
+        if (alreadyRegistered) {
+          continue;
+        }
 
         const artifact = await this.registerArtifact(
           taskId,
           entry.name,
           srcPath,
           type as Artifact["type"],
-          { scanned: "true", originalDir: workspacePath },
+          { scanned: "true", originalDir: dirPath },
         );
 
         artifacts.push(artifact);
       }
     } catch {
-      // Workspace may not exist; return empty
+      // Directory may not exist; skip
     }
-
-    return artifacts;
   }
 
   private inferType(path: string): Artifact["type"] {

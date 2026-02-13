@@ -189,6 +189,8 @@ export class Controller extends EventEmitter {
   private itemEventsBound = false;
   private approvalEventsBound = false;
   private readonly turnStartCountByTask = new Map<string, number>();
+  /** Accumulates agent message text per turn for post-turn artifact capture. */
+  private readonly turnOutputBuffers = new Map<string, string>();
 
   public constructor(
     private readonly appServerClient: AppServerClient,
@@ -353,6 +355,12 @@ export class Controller extends EventEmitter {
 
       const payload = params as ItemDeltaParams;
       this.emit(method, payload);
+
+      // Accumulate agent output for post-turn artifact capture
+      if (typeof payload.delta === "string" && payload.turnId) {
+        const existing = this.turnOutputBuffers.get(payload.turnId) ?? "";
+        this.turnOutputBuffers.set(payload.turnId, existing + payload.delta);
+      }
 
       if (this.streamToStdout && typeof payload.delta === "string") {
         process.stdout.write(payload.delta);
@@ -889,10 +897,27 @@ export class Controller extends EventEmitter {
       await this.enforceBlockedEditGuardrail(args.taskId, args.allowCoordinatorEdit ?? false);
     }
 
+    // Flush accumulated agent output for this turn
+    const turnOutput = this.turnOutputBuffers.get(completion.turn.id);
+    this.turnOutputBuffers.delete(completion.turn.id);
+
+    // Auto-save output as artifact if it's substantial (>100 chars)
+    if (turnOutput && turnOutput.length > 100) {
+      try {
+        const artifactDir = resolve(this.workspacePath, "_artifacts");
+        await mkdir(artifactDir, { recursive: true });
+        const outputPath = resolve(artifactDir, `turn-output-${completion.turn.id}.md`);
+        await writeFile(outputPath, turnOutput, "utf8");
+      } catch {
+        // Best-effort; don't fail the turn over artifact save
+      }
+    }
+
     return {
       threadId: args.threadId,
       turnId: completion.turn.id,
       status,
+      output: turnOutput ?? undefined,
     };
   }
 
@@ -1395,6 +1420,27 @@ export class Controller extends EventEmitter {
 
   public async getArtifacts(taskId: string): Promise<Artifact[]> {
     return this.artifactManager.getArtifacts(taskId);
+  }
+
+  /**
+   * Retrieve saved turn output text. Checks the in-memory buffer first,
+   * then falls back to the auto-saved artifact file on disk.
+   */
+  public async getTurnOutput(turnId: string): Promise<{ turnId: string; output: string }> {
+    // Check in-memory buffer (available if server hasn't restarted since the turn)
+    const buffered = this.turnOutputBuffers.get(turnId);
+    if (buffered) {
+      return { turnId, output: buffered };
+    }
+
+    // Fall back to artifact file on disk
+    const artifactPath = resolve(this.workspacePath, "_artifacts", `turn-output-${turnId}.md`);
+    try {
+      const content = await readFile(artifactPath, "utf8");
+      return { turnId, output: content };
+    } catch {
+      return { turnId, output: "(No output captured for this turn. The turn may not have produced agent messages, or the server restarted since completion.)" };
+    }
   }
 
   // --- Network Policy ---

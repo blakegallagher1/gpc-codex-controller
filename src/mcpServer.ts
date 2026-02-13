@@ -472,6 +472,13 @@ export function createMcpHandler(
   );
 
   mcp.tool(
+    "get_turn_output",
+    "Retrieve the full agent reasoning/output text from a completed turn. Use the turnId from a succeeded job result.",
+    { turnId: z.string().describe("Turn ID from a completed task result") },
+    async ({ turnId }) => textResult(await controller.getTurnOutput(turnId)),
+  );
+
+  mcp.tool(
     "get_network_policy",
     "Get the current org-level network allowlist.",
     {},
