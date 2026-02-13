@@ -24,7 +24,7 @@ request_json() {
   local url="$1"
   local token="$2"
 
-  request_url="${url}"
+  local request_url="${url}"
   log_request "${request_url}"
   curl -fsS --connect-timeout 10 --max-time 30 \
     -H "Authorization: Bearer ${token}" \
@@ -103,7 +103,7 @@ tfvar_list_length() {
 }
 
 state_has() {
-  terraform state list "$1" >/dev/null 2>&1
+  timeout 30 terraform state list "$1" >/dev/null 2>&1
 }
 
 import_if_needed() {
@@ -121,7 +121,7 @@ import_if_needed() {
   fi
 
   log "importing ${address} as ${id}"
-  terraform import "${address}" "${id}"
+  timeout 120 terraform import "${address}" "${id}"
 }
 
 if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || "${TERRAFORM_APPLY}" != "true" ]]; then
@@ -136,7 +136,6 @@ require_env_var CLOUDFLARE_ZONE_ID
 require_env_var CLOUDFLARE_API_TOKEN
 require_env_var HCLOUD_TOKEN
 
-WORKSPACE_SETTINGS_JSON_RAW="$(timeout 180 terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
 PROJECT_NAME="$(tfvar_string "project_name" "gpc-codex-controller")"
 ENVIRONMENT="$(tfvar_string "environment" "prod")"
 SUBDOMAIN="$(tfvar_string "subdomain" "codex-controller")"
