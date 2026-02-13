@@ -31,6 +31,77 @@ request_json() {
     "${url}"
 }
 
+tfvar_raw() {
+  local key="$1"
+  local file="${2:-terraform.tfvars}"
+  if [[ ! -f "${file}" ]]; then
+    return 1
+  fi
+
+  local line
+  line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "${file}" | head -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    return 1
+  fi
+
+  local value
+  value="$(echo "${line#*=}" | sed -E 's/^[[:space:]]+//;s/[[:space:]]+$//')"
+  echo "${value}"
+}
+
+tfvar_string() {
+  local key="$1"
+  local default="$2"
+  local raw
+
+  raw="$(tfvar_raw "${key}" "terraform.tfvars" || true)"
+  if [[ -z "${raw}" ]]; then
+    echo "${default}"
+    return 0
+  fi
+
+  if [[ "${raw}" == \"*\" && "${raw}" == *\" ]]; then
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+  fi
+
+  if [[ "${raw}" == "null" ]]; then
+    echo "${default}"
+    return 0
+  fi
+
+  echo "${raw}"
+}
+
+tfvar_bool() {
+  local key="$1"
+  local default="$2"
+  local raw
+
+  raw="$(tfvar_raw "${key}" "terraform.tfvars" || true)"
+  if [[ -z "${raw}" || "${raw}" == "null" ]]; then
+    echo "${default}"
+    return 0
+  fi
+  echo "${raw}"
+}
+
+tfvar_list_length() {
+  local key="$1"
+  local default="${2:-0}"
+  local raw
+
+  raw="$(tfvar_raw "${key}" "terraform.tfvars" || true)"
+  if [[ -z "${raw}" || "${raw}" == "null" ]]; then
+    echo "${default}"
+    return 0
+  fi
+
+  local length
+  length="$(jq -r 'if type=="array" then length else 0 end' <<< "${raw}" 2>/dev/null || echo "0")"
+  echo "${length}"
+}
+
 state_has() {
   terraform state list "$1" >/dev/null 2>&1
 }
@@ -66,25 +137,14 @@ require_env_var CLOUDFLARE_API_TOKEN
 require_env_var HCLOUD_TOKEN
 
 WORKSPACE_SETTINGS_JSON_RAW="$(timeout 180 terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
-if [[ -z "${WORKSPACE_SETTINGS_JSON_RAW}" ]]; then
-  echo "::error::terraform console timed out or returned empty settings payload."
-  exit 1
-fi
-WORKSPACE_SETTINGS_JSON="$(jq -r '.' <<<"${WORKSPACE_SETTINGS_JSON_RAW}")"
-
-if [[ -z "${WORKSPACE_SETTINGS_JSON}" || "${WORKSPACE_SETTINGS_JSON}" == "null" ]]; then
-  echo "::error::Failed to resolve Terraform variables for import lookup."
-  exit 1
-fi
-
-PROJECT_NAME="$(jq -r '.project_name' <<<"${WORKSPACE_SETTINGS_JSON}")"
-ENVIRONMENT="$(jq -r '.environment' <<<"${WORKSPACE_SETTINGS_JSON}")"
-SUBDOMAIN="$(jq -r '.subdomain' <<<"${WORKSPACE_SETTINGS_JSON}")"
-DOMAIN="$(jq -r '.domain' <<<"${WORKSPACE_SETTINGS_JSON}")"
-SSH_PUBLIC_KEY="$(jq -r '.ssh_public_key // ""' <<<"${WORKSPACE_SETTINGS_JSON}")"
-ACCESS_SERVICE_TOKEN_NAME="$(jq -r '.access_service_token_name' <<<"${WORKSPACE_SETTINGS_JSON}")"
-ENABLE_ACCESS="$(jq -r '.enable_access' <<<"${WORKSPACE_SETTINGS_JSON}")"
-ACCESS_ALLOWED_EMAILS="$(jq -r '.access_allowed_emails | length' <<<"${WORKSPACE_SETTINGS_JSON}")"
+PROJECT_NAME="$(tfvar_string "project_name" "gpc-codex-controller")"
+ENVIRONMENT="$(tfvar_string "environment" "prod")"
+SUBDOMAIN="$(tfvar_string "subdomain" "codex-controller")"
+DOMAIN="${TF_VAR_domain:-$(tfvar_string "domain" "")}"
+SSH_PUBLIC_KEY="$(tfvar_string "ssh_public_key" "")"
+ACCESS_SERVICE_TOKEN_NAME="$(tfvar_string "access_service_token_name" "gpc-codex-controller-api")"
+ENABLE_ACCESS="$(tfvar_bool "enable_access" "true")"
+ACCESS_ALLOWED_EMAILS="$(tfvar_list_length "access_allowed_emails" "0")"
 
 TUNNEL_NAME="${PROJECT_NAME}-${ENVIRONMENT}-tunnel"
 SERVER_NAME="${PROJECT_NAME}-${ENVIRONMENT}-vm"
