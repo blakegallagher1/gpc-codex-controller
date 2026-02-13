@@ -15,13 +15,13 @@ users:
 
 write_files:
   - path: /etc/default/gpc-codex-controller
-    owner: root:root
+    owner: root:${controller_user}
     permissions: "0640"
     content: |
 ${indent(6, controller_env_lines)}
 
   - path: /etc/default/cloudflared
-    owner: root:root
+    owner: root:${controller_user}
     permissions: "0640"
     content: |
       CLOUDFLARED_TUNNEL_TOKEN=${cloudflared_tunnel_token}

@@ -59,7 +59,14 @@ resource "hcloud_server" "this" {
 
   lifecycle {
     ignore_changes = [
-      firewall_ids
+      allow_deprecated_images,
+      firewall_ids,
+      ignore_remote_firewall_ids,
+      keep_disk,
+      public_net,
+      shutdown_before_deletion,
+      user_data,
+      ssh_keys
     ]
   }
 }
