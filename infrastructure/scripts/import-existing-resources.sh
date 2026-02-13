@@ -192,6 +192,11 @@ if ! CF_DNS_RECORD_LIST="$(request_json "https://api.cloudflare.com/client/v4/zo
   CF_DNS_RECORD_LIST='{"result":[]}'
 fi
 CF_DNS_RECORD_ID=$(jq -r --arg NAME "${DNS_RECORD_NAME}" '(.result // []) | map(select(.name == $NAME or .name == ($NAME + "."))) | first | .id // empty' <<<"${CF_DNS_RECORD_LIST}")
+if [[ -n "${CF_DNS_RECORD_ID}" ]]; then
+  CF_DNS_IMPORT_ID="${CLOUDFLARE_ZONE_ID}/${CF_DNS_RECORD_ID}"
+else
+  CF_DNS_IMPORT_ID=""
+fi
 
 H_TOKEN="${HCLOUD_TOKEN}"
 HCLOUD_API_HEADERS="Authorization: Bearer ${H_TOKEN}"
@@ -218,7 +223,7 @@ import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_tunnel_cloudfla
 import_if_needed "module.hetzner_vm.hcloud_server.this" "${HCLOUD_SERVER_ID}"
 import_if_needed "module.hetzner_vm.hcloud_firewall.this" "${HCLOUD_FIREWALL_ID}"
 import_if_needed "module.hetzner_vm.hcloud_volume.workspaces" "${HCLOUD_VOLUME_ID}"
-import_if_needed "module.cloudflare_tunnel.cloudflare_dns_record.this" "${CLOUDFLARE_ZONE_ID}/${CF_DNS_RECORD_ID}"
+import_if_needed "module.cloudflare_tunnel.cloudflare_dns_record.this" "${CF_DNS_IMPORT_ID}"
 
 if [[ "${ENABLE_ACCESS}" == "true" ]]; then
   import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_service_token.this[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_ID}"
