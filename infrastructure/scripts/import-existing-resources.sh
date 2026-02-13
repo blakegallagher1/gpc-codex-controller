@@ -65,7 +65,7 @@ require_env_var CLOUDFLARE_ZONE_ID
 require_env_var CLOUDFLARE_API_TOKEN
 require_env_var HCLOUD_TOKEN
 
-WORKSPACE_SETTINGS_JSON_RAW="$(timeout 30 terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
+WORKSPACE_SETTINGS_JSON_RAW="$(timeout 180 terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
 if [[ -z "${WORKSPACE_SETTINGS_JSON_RAW}" ]]; then
   echo "::error::terraform console timed out or returned empty settings payload."
   exit 1
