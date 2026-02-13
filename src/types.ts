@@ -113,8 +113,8 @@ export interface TurnStartParams {
 }
 
 export interface WorkspaceWriteTurnSandboxPolicy {
-  // Must match codex app-server enum variants (kebab-case).
-  type: "workspace-write";
+  // turn/start uses camelCase (thread/start uses kebab-case — Codex API inconsistency).
+  type: "workspaceWrite";
   writableRoots?: string[];
   networkAccess?: boolean;
   excludeTmpdirEnvVar?: boolean;
