@@ -128,6 +128,9 @@ resource "cloudflare_zero_trust_access_application" "this" {
 
   lifecycle {
     create_before_destroy = true
+    ignore_changes = [
+      policies
+    ]
   }
 }
 
@@ -168,6 +171,9 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
 
   lifecycle {
     create_before_destroy = true
+    ignore_changes = [
+      policies
+    ]
   }
 }
 
