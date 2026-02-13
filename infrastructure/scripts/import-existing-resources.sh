@@ -6,6 +6,11 @@ log() {
   echo "[import-existing] $*"
 }
 
+log_request() {
+  local endpoint="$1"
+  log "requesting ${endpoint}"
+}
+
 require_env_var() {
   local name="$1"
   local value="${!name-}"
@@ -19,7 +24,9 @@ request_json() {
   local url="$1"
   local token="$2"
 
-  curl -fsS \
+  request_url="${url}"
+  log_request "${request_url}"
+  curl -fsS --connect-timeout 10 --max-time 30 \
     -H "Authorization: Bearer ${token}" \
     "${url}"
 }
@@ -58,7 +65,11 @@ require_env_var CLOUDFLARE_ZONE_ID
 require_env_var CLOUDFLARE_API_TOKEN
 require_env_var HCLOUD_TOKEN
 
-WORKSPACE_SETTINGS_JSON_RAW="$(terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
+WORKSPACE_SETTINGS_JSON_RAW="$(timeout 30 terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
+if [[ -z "${WORKSPACE_SETTINGS_JSON_RAW}" ]]; then
+  echo "::error::terraform console timed out or returned empty settings payload."
+  exit 1
+fi
 WORKSPACE_SETTINGS_JSON="$(jq -r '.' <<<"${WORKSPACE_SETTINGS_JSON_RAW}")"
 
 if [[ -z "${WORKSPACE_SETTINGS_JSON}" || "${WORKSPACE_SETTINGS_JSON}" == "null" ]]; then
