@@ -486,6 +486,13 @@ export function createMcpHandler(
   );
 
   mcp.tool(
+    "read_artifact",
+    "Read the contents of an artifact file from the workspace. Use this to retrieve analysis reports, summaries, and other files written to _artifacts/. Pass just the filename (e.g., 'schema-summary.md') or a relative path from workspace root.",
+    { path: z.string().describe("Filename or relative path to read (e.g., '_artifacts/schema-summary.md' or just 'schema-summary.md')") },
+    async ({ path: filePath }) => textResult(await controller.readArtifact(filePath)),
+  );
+
+  mcp.tool(
     "get_network_policy",
     "Get the current org-level network allowlist.",
     {},

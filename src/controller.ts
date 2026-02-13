@@ -1481,6 +1481,36 @@ export class Controller extends EventEmitter {
     }
   }
 
+  /**
+   * Read the contents of a file from the workspace. Resolves relative to
+   * workspace root, with fallback to _artifacts/ subdirectory.
+   */
+  public async readArtifact(filePath: string): Promise<{ path: string; content: string }> {
+    const normalized = filePath.replace(/^\/+/, "");
+
+    // Security: block path traversal
+    if (normalized.includes("..")) {
+      return { path: normalized, content: "(Error: path traversal not allowed)" };
+    }
+
+    // Try exact path from workspace root first
+    const fullPath = resolve(this.workspacePath, normalized);
+    try {
+      const content = await readFile(fullPath, "utf8");
+      return { path: normalized, content };
+    } catch {
+      // Fall back to _artifacts/ prefix
+    }
+
+    const artifactsPath = resolve(this.workspacePath, "_artifacts", normalized);
+    try {
+      const content = await readFile(artifactsPath, "utf8");
+      return { path: `_artifacts/${normalized}`, content };
+    } catch {
+      return { path: normalized, content: `(File not found at '${normalized}' or '_artifacts/${normalized}')` };
+    }
+  }
+
   // --- Network Policy ---
 
   public async getNetworkPolicy(): Promise<OrgNetworkPolicy> {
