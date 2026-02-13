@@ -15,13 +15,13 @@ users:
 
 write_files:
   - path: /etc/default/gpc-codex-controller
-    owner: root:${controller_user}
+    owner: root:root
     permissions: "0640"
     content: |
       ${replace(controller_env_lines, "\n", "\n      ")}
 
   - path: /etc/default/cloudflared
-    owner: root:${controller_user}
+    owner: root:root
     permissions: "0640"
     content: |
       CLOUDFLARED_TUNNEL_TOKEN=${cloudflared_tunnel_token}
@@ -39,14 +39,15 @@ write_files:
       ${replace(cloudflared_service_unit, "\n", "\n      ")}
 
 runcmd:
-  - [bash, -lc, "apt-get update"]
-  - [bash, -lc, "apt-get install -y ca-certificates curl git jq build-essential"]
-  - [bash, -lc, "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"]
-  - [bash, -lc, "apt-get install -y nodejs"]
+  - [bash, -lc, "export DEBIAN_FRONTEND=noninteractive && apt-get update"]
+  - [bash, -lc, "export DEBIAN_FRONTEND=noninteractive && apt-get install -y ca-certificates curl git jq build-essential"]
+  - [bash, -lc, "export DEBIAN_FRONTEND=noninteractive && curl -fsSL https://deb.nodesource.com/setup_22.x | bash -"]
+  - [bash, -lc, "export DEBIAN_FRONTEND=noninteractive && apt-get install -y nodejs"]
   - [bash, -lc, "corepack enable"]
   - [bash, -lc, "npm install -g @openai/codex"]
   - [bash, -lc, "curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared"]
   - [bash, -lc, "chmod +x /usr/local/bin/cloudflared"]
+  - [bash, -lc, "chown root:${controller_user} /etc/default/gpc-codex-controller /etc/default/cloudflared"]
   - [bash, -lc, "mkdir -p /home/${controller_user}/.codex /home/${controller_user}/gpc-codex-controller ${workspace_mount_point}"]
   - [bash, -lc, "chown -R ${controller_user}:${controller_user} /home/${controller_user}/.codex /home/${controller_user}/gpc-codex-controller ${workspace_mount_point}"]
   - [bash, -lc, "if ! blkid /dev/disk/by-id/scsi-0HC_Volume_${volume_name}; then mkfs.ext4 /dev/disk/by-id/scsi-0HC_Volume_${volume_name}; fi"]

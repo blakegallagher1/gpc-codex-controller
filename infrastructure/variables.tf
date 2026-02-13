@@ -120,7 +120,7 @@ variable "controller_port" {
 variable "controller_start_command" {
   description = "Command executed by the systemd controller service."
   type        = string
-  default     = "npm start"
+  default     = "npm start -- serve"
 }
 
 variable "codex_home" {
