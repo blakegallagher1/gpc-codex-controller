@@ -195,17 +195,17 @@ H_TOKEN="${HCLOUD_TOKEN}"
 HCLOUD_API_HEADERS="Authorization: Bearer ${H_TOKEN}"
 HCLOUD_API_BASE="https://api.hetzner.cloud/v1"
 
-HCLOUD_SERVERS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/servers")
+HCLOUD_SERVERS="$(timeout 30 curl -fsS --connect-timeout 10 --max-time 30 -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/servers")"
 HCLOUD_SERVER_ID=$(jq -r --arg NAME "${SERVER_NAME}" '(.servers // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_SERVERS}")
 
-HCLOUD_FIREWALLS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/firewalls")
+HCLOUD_FIREWALLS="$(timeout 30 curl -fsS --connect-timeout 10 --max-time 30 -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/firewalls")"
 HCLOUD_FIREWALL_ID=$(jq -r --arg NAME "${FIREWALL_NAME}" '(.firewalls // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_FIREWALLS}")
 
-HCLOUD_VOLUMES=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/volumes")
+HCLOUD_VOLUMES="$(timeout 30 curl -fsS --connect-timeout 10 --max-time 30 -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/volumes")"
 HCLOUD_VOLUME_ID=$(jq -r --arg NAME "${VOLUME_NAME}" '(.volumes // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_VOLUMES}")
 
 if [[ -n "${SSH_PUBLIC_KEY}" ]]; then
-  HCLOUD_KEYS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/ssh_keys")
+  HCLOUD_KEYS="$(timeout 30 curl -fsS --connect-timeout 10 --max-time 30 -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/ssh_keys")"
   HCLOUD_SSH_KEY_ID=$(jq -r --arg NAME "${SSH_KEY_NAME}" '(.ssh_keys // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_KEYS}")
 else
   HCLOUD_SSH_KEY_ID=""
