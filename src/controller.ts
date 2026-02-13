@@ -191,6 +191,8 @@ export class Controller extends EventEmitter {
   private readonly turnStartCountByTask = new Map<string, number>();
   /** Accumulates agent message text per turn for post-turn artifact capture. */
   private readonly turnOutputBuffers = new Map<string, string>();
+  /** Tracks the currently executing turn ID for output buffering when delta events lack turnId. */
+  private activeTurnId: string | null = null;
 
   public constructor(
     private readonly appServerClient: AppServerClient,
@@ -357,9 +359,10 @@ export class Controller extends EventEmitter {
       this.emit(method, payload);
 
       // Accumulate agent output for post-turn artifact capture
-      if (typeof payload.delta === "string" && payload.turnId) {
-        const existing = this.turnOutputBuffers.get(payload.turnId) ?? "";
-        this.turnOutputBuffers.set(payload.turnId, existing + payload.delta);
+      const bufferKey = payload.turnId || this.activeTurnId;
+      if (typeof payload.delta === "string" && bufferKey) {
+        const existing = this.turnOutputBuffers.get(bufferKey) ?? "";
+        this.turnOutputBuffers.set(bufferKey, existing + payload.delta);
       }
 
       if (this.streamToStdout && typeof payload.delta === "string") {
@@ -854,6 +857,7 @@ export class Controller extends EventEmitter {
     });
 
     const startedTurnId = startResult.turn.id;
+    this.activeTurnId = startedTurnId;
     const waitForCompletion = this.appServerClient.waitForNotification<TurnCompletedParams>(
       "turn/completed",
       TURN_TIMEOUT_MS,
@@ -898,6 +902,7 @@ export class Controller extends EventEmitter {
     }
 
     // Flush accumulated agent output for this turn
+    this.activeTurnId = null;
     const turnOutput = this.turnOutputBuffers.get(completion.turn.id);
     this.turnOutputBuffers.delete(completion.turn.id);
 
