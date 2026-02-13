@@ -15,6 +15,9 @@ import {
   type TurnStartResult,
   type ThreadStartParams,
   type ThreadStartResult,
+  type TurnSteerParams,
+  type ReviewStartParams,
+  type TokenUsageUpdate,
   isJsonRpcFailure,
   isJsonRpcRequest,
   isJsonRpcResponse,
@@ -49,6 +52,8 @@ export class AppServerClient extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | undefined;
   private pending = new Map<number, PendingRequest>();
   private nextRequestId = 1;
+  private readonly tokenUsageByThread = new Map<string, TokenUsageUpdate>();
+  private tokenUsageListenerBound = false;
 
   private receiveTextBuffer = "";
 
@@ -137,6 +142,53 @@ export class AppServerClient extends EventEmitter {
 
   public async compactThread(threadId: string): Promise<CompactStartResult> {
     return this.request<CompactStartResult>("thread/compact/start", { threadId } satisfies CompactStartParams);
+  }
+
+  public async steerTurn(params: TurnSteerParams): Promise<void> {
+    return this.request("turn/steer", params);
+  }
+
+  public async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    return this.request("turn/interrupt", { threadId, turnId });
+  }
+
+  public async forkThread(threadId: string): Promise<ThreadStartResult> {
+    return this.request<ThreadStartResult>("thread/fork", { threadId });
+  }
+
+  public async startReview(params: ReviewStartParams): Promise<void> {
+    return this.request("review/start", params);
+  }
+
+  public async resumeThread(threadId: string): Promise<ThreadStartResult> {
+    return this.request<ThreadStartResult>("thread/resume", { threadId });
+  }
+
+  public async rollbackThread(threadId: string, count: number): Promise<void> {
+    return this.request("thread/rollback", { threadId, count });
+  }
+
+  public getTokenUsage(threadId: string): TokenUsageUpdate | undefined {
+    return this.tokenUsageByThread.get(threadId);
+  }
+
+  public enableTokenUsageTracking(): void {
+    if (this.tokenUsageListenerBound) {
+      return;
+    }
+    this.tokenUsageListenerBound = true;
+
+    this.on("notification", (method: string, params: unknown) => {
+      if (method !== "thread/tokenUsage/updated") {
+        return;
+      }
+      const usage = params as TokenUsageUpdate | undefined;
+      if (!usage?.threadId) {
+        return;
+      }
+      this.tokenUsageByThread.set(usage.threadId, usage);
+      this.emit("tokenUsage", usage);
+    });
   }
 
   public async request<TResult, TParams = unknown>(method: string, params?: TParams): Promise<TResult> {

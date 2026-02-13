@@ -43,6 +43,11 @@ export class TaskRegistry {
     return registry.tasks[taskId] ?? null;
   }
 
+  public async listTasks(): Promise<TaskRecord[]> {
+    const registry = await this.load();
+    return Object.values(registry.tasks);
+  }
+
   public async updateTaskStatus(taskId: string, status: TaskStatus): Promise<TaskRecord> {
     const registry = await this.load();
     const task = registry.tasks[taskId];

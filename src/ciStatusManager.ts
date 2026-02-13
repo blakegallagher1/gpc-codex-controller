@@ -7,6 +7,23 @@ interface CIStore {
   runs: CIRunRecord[];
 }
 
+/**
+ * Minimal shape of a GitHub check_suite webhook payload.
+ * Only the fields we actually inspect are typed.
+ */
+export interface CheckSuitePayload {
+  check_suite: {
+    id: number;
+    head_sha: string;
+    status: string;
+    conclusion: string | null;
+    app?: { slug?: string } | undefined;
+  };
+  repository: {
+    full_name: string;
+  };
+}
+
 const EMPTY_STORE: CIStore = { version: 1, runs: [] };
 const MAX_RUNS = 500;
 
@@ -30,6 +47,50 @@ export class CIStatusManager {
 
     await this.save(store);
     return run;
+  }
+
+  /**
+   * Record a CI run from a GitHub check_suite webhook event.
+   * Maps the webhook payload into a CIRunRecord with source="webhook".
+   */
+  public async recordFromWebhook(taskId: string, payload: CheckSuitePayload): Promise<CIRunRecord> {
+    const suite = payload.check_suite;
+    const conclusion = suite.conclusion ?? "pending";
+    const passed = conclusion === "success";
+
+    return this.recordRun({
+      taskId,
+      passed,
+      exitCode: passed ? 0 : 1,
+      duration_ms: 0, // Webhook doesn't carry duration; can be enriched later.
+      failureCount: passed ? 0 : 1,
+      failureSummary: passed ? [] : [`check_suite conclusion: ${conclusion}`],
+      ghRunId: suite.id,
+      source: "webhook",
+    });
+  }
+
+  /**
+   * Record a CI run from a triggered GitHub Actions workflow.
+   * Used by CIIntegrationManager after polling completes.
+   */
+  public async recordFromCI(
+    taskId: string,
+    ghRunId: number,
+    passed: boolean,
+    durationMs: number,
+    failureSummary: string[],
+  ): Promise<CIRunRecord> {
+    return this.recordRun({
+      taskId,
+      passed,
+      exitCode: passed ? 0 : 1,
+      duration_ms: durationMs,
+      failureCount: passed ? 0 : failureSummary.length,
+      failureSummary,
+      ghRunId,
+      source: "ci",
+    });
   }
 
   public async getStatus(taskId: string): Promise<CIStatusSummary> {
@@ -66,6 +127,42 @@ export class CIStatusManager {
     const store = await this.load();
     const taskRuns = store.runs.filter((r) => r.taskId === taskId);
     return this.detectRegressions(taskRuns);
+  }
+
+  /**
+   * Compare the latest run with the previous run and detect regressions.
+   * Useful for comparing after a new CI run completes to see if things got worse.
+   */
+  public async compareWithPrevious(taskId: string): Promise<{ regressed: boolean; detail: string }> {
+    const store = await this.load();
+    const taskRuns = store.runs.filter((r) => r.taskId === taskId);
+
+    if (taskRuns.length < 2) {
+      return { regressed: false, detail: "Not enough runs to compare." };
+    }
+
+    const prev = taskRuns[taskRuns.length - 2] as CIRunRecord;
+    const curr = taskRuns[taskRuns.length - 1] as CIRunRecord;
+
+    if (prev.passed && !curr.passed) {
+      return {
+        regressed: true,
+        detail: `Regression detected: run ${curr.runId} failed after ${prev.runId} passed (${curr.failureCount} failures).`,
+      };
+    }
+
+    if (!prev.passed && !curr.passed && curr.failureCount > prev.failureCount) {
+      return {
+        regressed: true,
+        detail: `Degradation: failure count increased from ${prev.failureCount} to ${curr.failureCount}.`,
+      };
+    }
+
+    if (!prev.passed && curr.passed) {
+      return { regressed: false, detail: `Improvement: run ${curr.runId} passed after ${prev.runId} failed.` };
+    }
+
+    return { regressed: false, detail: "No regression detected." };
   }
 
   private detectRegressions(runs: CIRunRecord[]): string[] {

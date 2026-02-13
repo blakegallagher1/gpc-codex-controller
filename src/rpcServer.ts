@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Controller } from "./controller.js";
 import { createMcpHandler, type JobRecord } from "./mcpServer.js";
+import type { WebhookHandler } from "./webhookHandler.js";
 
 // We intentionally keep JSON-RPC payloads permissive and rely on JSON.stringify
 // at the boundary, rather than trying to perfectly model "JSON serializable" in TS.
@@ -28,6 +29,7 @@ export interface RpcServerOptions {
   port: number;
   bearerToken?: string;
   shutdownGraceMs?: number;
+  webhookHandler?: WebhookHandler;
 }
 
 function jsonRpcError(id: JsonValue | null, code: number, message: string, data?: JsonValue): JsonRpcResponse {
@@ -483,6 +485,262 @@ async function handle(controller: Controller, request: JsonRpcRequest): Promise<
       return { cancelled: await controller.cancelAutonomousRun(params.runId) };
     }
 
+    // --- Alerting ---
+    case "alert/send": {
+      const params = request.params as unknown as {
+        severity?: string; source?: string; title?: string; message?: string;
+        metadata?: Record<string, unknown>;
+      };
+      if (!params?.title || params.title.trim().length === 0) throw new Error("alert/send requires params.title");
+      if (!params?.message || params.message.trim().length === 0) throw new Error("alert/send requires params.message");
+      return await controller.sendAlert({
+        severity: (params.severity ?? "info") as "info" | "warning" | "error" | "critical",
+        source: params.source ?? "manual",
+        title: params.title,
+        message: params.message,
+        ...(params.metadata !== undefined ? { metadata: params.metadata } : {}),
+      });
+    }
+
+    case "alert/config":
+      return await controller.getAlertConfig();
+
+    case "alert/setConfig": {
+      const params = request.params as unknown as { channels?: Array<{ type: string; enabled: boolean; url?: string }> } | undefined;
+      const channels = params?.channels?.map((c) => ({
+        type: c.type as "slack" | "webhook" | "console",
+        enabled: c.enabled,
+        ...(c.url !== undefined ? { url: c.url } : {}),
+      }));
+      return await controller.setAlertConfig(channels !== undefined ? { channels } : {});
+    }
+
+    case "alert/history": {
+      const params = request.params as unknown as { limit?: number };
+      return await controller.getAlertHistory(params?.limit);
+    }
+
+    case "alert/mute": {
+      const params = request.params as unknown as { pattern?: string; durationMs?: number };
+      if (!params?.pattern || params.pattern.trim().length === 0) throw new Error("alert/mute requires params.pattern");
+      return await controller.muteAlert(params.pattern, params.durationMs ?? 3600000);
+    }
+
+    // --- Merge Queue ---
+    case "merge/enqueue": {
+      const params = request.params as unknown as { taskId?: string; prNumber?: number; priority?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("merge/enqueue requires params.taskId");
+      if (typeof params.prNumber !== "number") throw new Error("merge/enqueue requires params.prNumber");
+      return await controller.enqueueMerge(params.taskId, params.prNumber, params.priority);
+    }
+
+    case "merge/dequeue":
+      return await controller.dequeueMerge();
+
+    case "merge/checkFreshness": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("merge/checkFreshness requires params.taskId");
+      return await controller.checkMergeFreshness(params.taskId);
+    }
+
+    case "merge/rebase": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("merge/rebase requires params.taskId");
+      return await controller.rebaseOntoMain(params.taskId);
+    }
+
+    case "merge/detectConflicts": {
+      const params = request.params as unknown as { taskId?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("merge/detectConflicts requires params.taskId");
+      return await controller.detectMergeConflicts(params.taskId);
+    }
+
+    case "merge/queueStatus":
+      return await controller.getMergeQueueStatus();
+
+    // --- Dashboard ---
+    case "dashboard/get":
+      return await controller.getDashboard();
+
+    // --- CI Integration ---
+    case "ci/trigger": {
+      const params = request.params as unknown as { taskId?: string; sha?: string; workflowFile?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/trigger requires params.taskId");
+      if (!params?.sha || params.sha.trim().length === 0) throw new Error("ci/trigger requires params.sha");
+      return await controller.triggerCI(params.taskId, params.sha, params.workflowFile);
+    }
+
+    case "ci/poll": {
+      const params = request.params as unknown as { taskId?: string; ghRunId?: number; timeoutMs?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/poll requires params.taskId");
+      if (typeof params.ghRunId !== "number") throw new Error("ci/poll requires params.ghRunId");
+      return await controller.pollCIStatus(params.taskId, params.ghRunId, params.timeoutMs);
+    }
+
+    case "ci/failureLogs": {
+      const params = request.params as unknown as { taskId?: string; ghRunId?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/failureLogs requires params.taskId");
+      if (typeof params.ghRunId !== "number") throw new Error("ci/failureLogs requires params.ghRunId");
+      return await controller.getCIFailureLogs(params.taskId, params.ghRunId);
+    }
+
+    case "ci/triggerAndWait": {
+      const params = request.params as unknown as { taskId?: string; sha?: string; workflowFile?: string; timeoutMs?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("ci/triggerAndWait requires params.taskId");
+      if (!params?.sha || params.sha.trim().length === 0) throw new Error("ci/triggerAndWait requires params.sha");
+      return await controller.triggerAndWaitCI(params.taskId, params.sha, params.workflowFile, params.timeoutMs);
+    }
+
+    // --- PR Automerge ---
+    case "automerge/evaluate": {
+      const params = request.params as unknown as { taskId?: string; prNumber?: number };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("automerge/evaluate requires params.taskId");
+      if (typeof params.prNumber !== "number") throw new Error("automerge/evaluate requires params.prNumber");
+      return await controller.evaluateAutomerge(params.taskId, params.prNumber);
+    }
+
+    case "automerge/merge": {
+      const params = request.params as unknown as { taskId?: string; prNumber?: number; strategy?: string };
+      if (!params?.taskId || params.taskId.trim().length === 0) throw new Error("automerge/merge requires params.taskId");
+      if (typeof params.prNumber !== "number") throw new Error("automerge/merge requires params.prNumber");
+      return await controller.executeMerge(params.taskId, params.prNumber, (params.strategy ?? "squash") as "squash" | "merge" | "rebase");
+    }
+
+    case "automerge/getPolicy":
+      return await controller.getAutomergePolicy();
+
+    case "automerge/setPolicy": {
+      const params = request.params as unknown as Partial<{
+        prefixWhitelist: string[];
+        maxLinesChanged: number;
+        requireCIGreen: boolean;
+        requireReviewApproval: boolean;
+        neverAutomergePatterns: string[];
+      }>;
+      return await controller.setAutomergePolicy(params ?? {});
+    }
+
+    // --- Issue Triage ---
+    case "triage/run": {
+      const params = request.params as unknown as { issueNumber?: number; title?: string; body?: string; repo?: string; author?: string; url?: string };
+      if (typeof params?.issueNumber !== "number") throw new Error("triage/run requires params.issueNumber");
+      if (!params?.title || params.title.trim().length === 0) throw new Error("triage/run requires params.title");
+      return await controller.triageIssue({
+        issueNumber: params.issueNumber,
+        title: params.title,
+        body: params.body ?? "",
+        repo: params.repo ?? "",
+        author: params.author ?? "unknown",
+        url: params.url ?? "",
+        existingLabels: [],
+      });
+    }
+
+    case "triage/history": {
+      const params = request.params as unknown as { limit?: number };
+      return await controller.getTriageHistory(params?.limit);
+    }
+
+    case "triage/convertToTask": {
+      const params = request.params as unknown as { issueNumber?: number; title?: string; body?: string; repo?: string; author?: string; url?: string };
+      if (typeof params?.issueNumber !== "number") throw new Error("triage/convertToTask requires params.issueNumber");
+      if (!params?.title || params.title.trim().length === 0) throw new Error("triage/convertToTask requires params.title");
+      return await controller.convertIssueToTask({
+        issueNumber: params.issueNumber,
+        title: params.title,
+        body: params.body ?? "",
+        repo: params.repo ?? "",
+        author: params.author ?? "unknown",
+        url: params.url ?? "",
+        existingLabels: [],
+      });
+    }
+
+    case "webhook/auditLog": {
+      const params = request.params as unknown as { limit?: number };
+      return controller.getWebhookAuditLog(params?.limit);
+    }
+
+    // --- Scheduler ---
+    case "scheduler/start":
+      return await controller.startScheduler();
+
+    case "scheduler/stop":
+      return await controller.stopScheduler();
+
+    case "scheduler/status":
+      return await controller.getScheduleStatus();
+
+    case "scheduler/trigger": {
+      const params = request.params as unknown as { jobName?: string };
+      if (!params?.jobName) throw new Error("scheduler/trigger requires params.jobName");
+      return await controller.triggerScheduledJob(params.jobName as "quality-scan" | "architecture-sweep" | "doc-gardening" | "gc-sweep");
+    }
+
+    case "scheduler/setInterval": {
+      const params = request.params as unknown as { jobName?: string; intervalMs?: number };
+      if (!params?.jobName) throw new Error("scheduler/setInterval requires params.jobName");
+      if (typeof params.intervalMs !== "number") throw new Error("scheduler/setInterval requires params.intervalMs");
+      return await controller.setJobInterval(params.jobName as "quality-scan" | "architecture-sweep" | "doc-gardening" | "gc-sweep", params.intervalMs);
+    }
+
+    case "scheduler/jobHistory": {
+      const params = request.params as unknown as { jobName?: string };
+      if (!params?.jobName) throw new Error("scheduler/jobHistory requires params.jobName");
+      return await controller.getJobHistory(params.jobName as "quality-scan" | "architecture-sweep" | "doc-gardening" | "gc-sweep");
+    }
+
+    // --- Refactoring ---
+    case "refactoring/scan":
+      return await controller.scanForViolations();
+
+    case "refactoring/report":
+      return await controller.getViolationReport();
+
+    case "refactoring/generate": {
+      const params = request.params as unknown as { violationType?: string };
+      if (!params?.violationType) throw new Error("refactoring/generate requires params.violationType");
+      return await controller.generateRefactoringPR(params.violationType as "duplicate-helper" | "untyped-boundary" | "import-hygiene" | "dead-code" | "duplicate-logic");
+    }
+
+    case "refactoring/history":
+      return await controller.getRefactoringHistory();
+
+    // --- GitHub Review Poster ---
+    case "review/postToGitHub": {
+      const params = request.params as unknown as {
+        prNumber?: number;
+        findings?: Array<{ file: string; line: number | null; severity: string; message: string; rule: string }>;
+        verdict?: string;
+      };
+      if (typeof params?.prNumber !== "number") throw new Error("review/postToGitHub requires params.prNumber");
+      if (!params?.findings || !Array.isArray(params.findings)) throw new Error("review/postToGitHub requires params.findings");
+      if (!params?.verdict) throw new Error("review/postToGitHub requires params.verdict");
+      return await controller.postPRReview(
+        params.prNumber,
+        params.findings as Array<{ file: string; line: number | null; severity: "error" | "warning" | "suggestion"; message: string; rule: string }>,
+        params.verdict as "APPROVE" | "REQUEST_CHANGES" | "COMMENT",
+      );
+    }
+
+    case "review/postSummary": {
+      const params = request.params as unknown as {
+        prNumber?: number;
+        qualityScore?: { overall: number; breakdown: { eval: number; ci: number; lint: number; architecture: number; docs: number } };
+        evalResult?: { passed: boolean; overallScore: number; checkCount: number; passedCount: number };
+      };
+      if (typeof params?.prNumber !== "number") throw new Error("review/postSummary requires params.prNumber");
+      if (!params?.qualityScore) throw new Error("review/postSummary requires params.qualityScore");
+      if (!params?.evalResult) throw new Error("review/postSummary requires params.evalResult");
+      return await controller.postPRSummary(params.prNumber, params.qualityScore, params.evalResult);
+    }
+
+    case "review/status": {
+      const params = request.params as unknown as { prNumber?: number };
+      if (typeof params?.prNumber !== "number") throw new Error("review/status requires params.prNumber");
+      return await controller.getPRReviewStatus(params.prNumber);
+    }
+
     default:
       throw new Error(`Method not found: ${request.method}`);
   }
@@ -530,6 +788,31 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
       if (req.method === "GET" && (req.url === "/" || req.url === "/healthz")) {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+
+      // Dashboard endpoint — returns aggregate system status.
+      if (req.method === "GET" && req.url === "/dashboard") {
+        try {
+          const dashboard = await options.controller.getDashboard();
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(dashboard));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: message }));
+        }
+        return;
+      }
+
+      // GitHub Webhook endpoint — signature-verified, processed async.
+      if (req.method === "POST" && req.url === "/webhooks/github") {
+        if (options.webhookHandler) {
+          await options.webhookHandler.handleRequest(req, res);
+        } else {
+          res.writeHead(501, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "webhook_handler_not_configured" }));
+        }
         return;
       }
 
@@ -587,6 +870,9 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
           "bug/reproduce",
           "shell/execute",
           "autonomous/start",
+          "ci/triggerAndWait",
+          "ci/poll",
+          "triage/convertToTask",
         ]);
         if (asyncMethods.has(typed.method)) {
           const job = startJob(typed.method, async () => handle(options.controller, typed));

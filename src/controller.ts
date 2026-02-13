@@ -25,6 +25,15 @@ import { DomainSecretsManager } from "./domainSecretsManager.js";
 import { CompactionManager } from "./compactionManager.js";
 import { ShellToolManager } from "./shellToolManager.js";
 import { AutonomousOrchestrator } from "./autonomousOrchestrator.js";
+import { CIIntegrationManager } from "./ciIntegrationManager.js";
+import { PRAutomergeManager } from "./prAutomergeManager.js";
+import { AlertManager } from "./alertManager.js";
+import { MergeQueueManager } from "./mergeQueueManager.js";
+import { IssueTriageManager, type TriageInput, type TriageResult, type TriageRecord, type ConvertResult } from "./issueTriageManager.js";
+import { WebhookHandler, type WebhookEvent } from "./webhookHandler.js";
+import { SchedulerManager, type ScheduleStatus, type ScheduledJobName, type JobHistoryEntry, type ScheduledJobConfig } from "./schedulerManager.js";
+import { RefactoringManager, type ViolationReport, type ViolationType, type RefactoringHistory, type RefactoringRun } from "./refactoringManager.js";
+import { GitHubReviewPoster, type ReviewFindingInput, type ReviewVerdict, type PostReviewResult, type PostSummaryResult, type ReviewStatus as PRReviewStatus, type QualityScoreInput, type EvalResultInput } from "./githubReviewPoster.js";
 import type {
   ApprovalPolicy,
   AppBootResult,
@@ -80,6 +89,20 @@ import type {
   ShellToolConfig,
   AutonomousRunParams,
   AutonomousRunRecord,
+  CITriggerResult,
+  CIPollResult,
+  CIFailureLogs,
+  AutomergePolicy,
+  AutomergeEvaluation,
+  AutomergeResult,
+  AlertConfig,
+  AlertChannelConfig,
+  AlertEvent,
+  AlertMuteRule,
+  AlertSeverity,
+  ConflictDetectionResult,
+  DashboardData,
+  MergeQueueEntry,
 } from "./types.js";
 import { GitManager } from "./gitManager.js";
 import { TaskRegistry } from "./taskRegistry.js";
@@ -149,6 +172,15 @@ export class Controller extends EventEmitter {
   private readonly compactionManager: CompactionManager;
   private readonly shellToolManager: ShellToolManager;
   private readonly autonomousOrchestrator: AutonomousOrchestrator;
+  private readonly ciIntegrationManager: CIIntegrationManager;
+  private readonly prAutomergeManager: PRAutomergeManager;
+  private readonly alertManager: AlertManager;
+  private readonly mergeQueueManager: MergeQueueManager;
+  private readonly issueTriageManager: IssueTriageManager;
+  private readonly webhookHandler: WebhookHandler;
+  private readonly schedulerManager: SchedulerManager;
+  private readonly refactoringManager: RefactoringManager;
+  private readonly githubReviewPoster: GitHubReviewPoster;
 
   private state: ControllerState = {};
   private bootstrapped = false;
@@ -237,6 +269,43 @@ export class Controller extends EventEmitter {
       this,
       `${stateDir}/autonomous-runs.json`,
     );
+
+    // CI Integration + PR Automerge
+    this.ciIntegrationManager = new CIIntegrationManager(
+      this.workspaceManager,
+      this.ciStatusManager,
+    );
+    this.prAutomergeManager = new PRAutomergeManager(
+      `${stateDir}/automerge-policy.json`,
+      this.workspaceManager,
+      this.ciStatusManager,
+    );
+
+    // Alerting + Merge Queue
+    this.alertManager = new AlertManager(
+      `${stateDir}/alerts-config.json`,
+      `${stateDir}/alerts-history.json`,
+    );
+    this.mergeQueueManager = new MergeQueueManager(
+      `${stateDir}/merge-queue.json`,
+      this.workspaceManager,
+    );
+
+    // Issue Triage + Webhook Handler
+    this.issueTriageManager = new IssueTriageManager(
+      `${stateDir}/triage.json`,
+      this,
+    );
+    this.webhookHandler = new WebhookHandler(this, this.issueTriageManager);
+
+    // Scheduler
+    this.schedulerManager = new SchedulerManager(`${stateDir}/scheduler.json`);
+
+    // Refactoring Manager
+    this.refactoringManager = new RefactoringManager(`${stateDir}/refactoring.json`);
+
+    // GitHub Review Poster
+    this.githubReviewPoster = new GitHubReviewPoster();
   }
 
   public async bootstrap(): Promise<{ threadId: string }> {
@@ -1696,5 +1765,278 @@ export class Controller extends EventEmitter {
       throw new Error(`Task not found: ${taskId}`);
     }
     await this.deployAgentsMd(task.workspacePath);
+  }
+
+  // --- CI Integration ---
+
+  public async triggerCI(taskId: string, sha: string, workflowFile?: string): Promise<CITriggerResult> {
+    return this.ciIntegrationManager.triggerCI(taskId, sha, workflowFile);
+  }
+
+  public async pollCIStatus(taskId: string, ghRunId: number, timeoutMs?: number): Promise<CIPollResult> {
+    return this.ciIntegrationManager.pollCIStatus(taskId, ghRunId, timeoutMs);
+  }
+
+  public async getCIFailureLogs(taskId: string, ghRunId: number): Promise<CIFailureLogs> {
+    return this.ciIntegrationManager.getCIFailureLogs(taskId, ghRunId);
+  }
+
+  public async triggerAndWaitCI(
+    taskId: string,
+    sha: string,
+    workflowFile?: string,
+    timeoutMs?: number,
+  ): Promise<{ trigger: CITriggerResult; poll: CIPollResult; failures: CIFailureLogs | null }> {
+    return this.ciIntegrationManager.triggerAndWait(taskId, sha, workflowFile, timeoutMs);
+  }
+
+  // --- PR Automerge ---
+
+  public async evaluateAutomerge(taskId: string, prNumber: number): Promise<AutomergeEvaluation> {
+    return this.prAutomergeManager.evaluateAutomerge(taskId, prNumber);
+  }
+
+  public async executeMerge(
+    taskId: string,
+    prNumber: number,
+    strategy?: "squash" | "merge" | "rebase",
+  ): Promise<AutomergeResult> {
+    return this.prAutomergeManager.executeMerge(taskId, prNumber, strategy);
+  }
+
+  public async getAutomergePolicy(): Promise<AutomergePolicy> {
+    return this.prAutomergeManager.getAutomergePolicy();
+  }
+
+  public async setAutomergePolicy(policy: Partial<AutomergePolicy>): Promise<AutomergePolicy> {
+    return this.prAutomergeManager.setAutomergePolicy(policy);
+  }
+
+  // --- Alerting ---
+
+  public async sendAlert(params: {
+    severity: AlertSeverity;
+    source: string;
+    title: string;
+    message: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<AlertEvent> {
+    return this.alertManager.sendAlert(params);
+  }
+
+  public async getAlertConfig(): Promise<AlertConfig> {
+    return this.alertManager.getAlertConfig();
+  }
+
+  public async setAlertConfig(config: { channels?: AlertChannelConfig[] }): Promise<AlertConfig> {
+    return this.alertManager.setAlertConfig(config);
+  }
+
+  public async getAlertHistory(limit?: number): Promise<AlertEvent[]> {
+    return this.alertManager.getAlertHistory(limit);
+  }
+
+  public async muteAlert(pattern: string, durationMs: number): Promise<AlertMuteRule> {
+    return this.alertManager.muteAlert(pattern, durationMs);
+  }
+
+  // --- Merge Queue ---
+
+  public async enqueueMerge(taskId: string, prNumber: number, priority?: number): Promise<MergeQueueEntry> {
+    return this.mergeQueueManager.enqueue(taskId, prNumber, priority);
+  }
+
+  public async dequeueMerge(): Promise<MergeQueueEntry | null> {
+    return this.mergeQueueManager.dequeue();
+  }
+
+  public async checkMergeFreshness(taskId: string): Promise<{ fresh: boolean; behindBy: number }> {
+    return this.mergeQueueManager.checkFreshness(taskId);
+  }
+
+  public async rebaseOntoMain(taskId: string): Promise<{ success: boolean; error: string | null }> {
+    return this.mergeQueueManager.rebaseOntoMain(taskId);
+  }
+
+  public async detectMergeConflicts(taskId: string): Promise<ConflictDetectionResult> {
+    return this.mergeQueueManager.detectConflicts(taskId);
+  }
+
+  public async getMergeQueueStatus(): Promise<{
+    entries: MergeQueueEntry[];
+    depth: number;
+    blockedCount: number;
+    readyCount: number;
+  }> {
+    return this.mergeQueueManager.getQueueStatus();
+  }
+
+  // --- Dashboard ---
+
+  public async getDashboard(): Promise<DashboardData> {
+    const [
+      tasks,
+      autonomousRuns,
+      alertHistory,
+      mergeQueueStatus,
+      schedulerStatus,
+    ] = await Promise.all([
+      this.taskRegistry.listTasks(),
+      this.autonomousOrchestrator.listRuns(10),
+      this.alertManager.getAlertHistory(100),
+      this.mergeQueueManager.getQueueStatus(),
+      this.schedulerManager.getScheduleStatus(),
+    ]);
+
+    // Compute CI pass rate from recent runs across all tasks
+    let ciPassRate = 0;
+    try {
+      // Aggregate across recent tasks
+      let totalRuns = 0;
+      let passedRuns = 0;
+      for (const task of tasks.slice(0, 20)) {
+        const ciStatus = await this.ciStatusManager.getStatus(task.taskId);
+        totalRuns += ciStatus.totalRuns;
+        passedRuns += Math.round(ciStatus.passRate * ciStatus.totalRuns);
+      }
+      ciPassRate = totalRuns > 0 ? passedRuns / totalRuns : 0;
+    } catch {
+      // Non-critical
+    }
+
+    // Compute alert severity summary
+    const alertSummary = { total: 0, critical: 0, error: 0, warning: 0, info: 0 };
+    for (const alert of alertHistory) {
+      alertSummary.total += 1;
+      alertSummary[alert.severity] += 1;
+    }
+
+    // Collect quality scores for recent tasks
+    const qualityScores: QualityScore[] = [];
+    for (const task of tasks.slice(0, 10)) {
+      try {
+        const score = await this.qualityScoreManager.getScore(task.taskId);
+        qualityScores.push(score);
+      } catch {
+        // Skip tasks without quality scores
+      }
+    }
+
+    return {
+      tasks,
+      recentAutonomousRuns: autonomousRuns,
+      qualityScores,
+      ciPassRate,
+      alertSummary,
+      mergeQueueDepth: mergeQueueStatus.depth,
+      schedulerRunning: schedulerStatus.running,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // --- Issue Triage ---
+
+  public async triageIssue(input: TriageInput): Promise<TriageResult> {
+    return this.issueTriageManager.triageIssue(input);
+  }
+
+  public async getTriageHistory(limit?: number): Promise<TriageRecord[]> {
+    return this.issueTriageManager.getTriageHistory(limit);
+  }
+
+  public async convertIssueToTask(input: TriageInput): Promise<ConvertResult> {
+    return this.issueTriageManager.convertIssueToTask(input);
+  }
+
+  // --- Webhook Handler ---
+
+  public getWebhookHandler(): WebhookHandler {
+    return this.webhookHandler;
+  }
+
+  public getWebhookAuditLog(limit?: number): WebhookEvent[] {
+    return this.webhookHandler.getAuditLog(limit);
+  }
+
+  // --- Scheduler ---
+
+  public async startScheduler(): Promise<ScheduleStatus> {
+    this.schedulerManager.setExecutor(async (jobName) => {
+      switch (jobName) {
+        case "quality-scan":
+          try { await this.qualityScoreManager.getScore("scheduler-quality-scan"); } catch { /* non-critical */ }
+          break;
+        case "architecture-sweep":
+          try { await this.refactoringManager.scanForViolations(this.workspacePath); } catch { /* non-critical */ }
+          break;
+        case "doc-gardening":
+          try { await this.docValidator.validate("scheduler-doc-gardening"); } catch { /* non-critical */ }
+          break;
+        case "gc-sweep":
+          try { await this.runGCSweep(); } catch { /* non-critical */ }
+          break;
+      }
+    });
+    return this.schedulerManager.startScheduler();
+  }
+
+  public async stopScheduler(): Promise<ScheduleStatus> {
+    return this.schedulerManager.stopScheduler();
+  }
+
+  public async getScheduleStatus(): Promise<ScheduleStatus> {
+    return this.schedulerManager.getScheduleStatus();
+  }
+
+  public async triggerScheduledJob(jobName: ScheduledJobName): Promise<JobHistoryEntry> {
+    return this.schedulerManager.triggerJob(jobName);
+  }
+
+  public async setJobInterval(jobName: ScheduledJobName, intervalMs: number): Promise<ScheduledJobConfig> {
+    return this.schedulerManager.setJobInterval(jobName, intervalMs);
+  }
+
+  public async getJobHistory(jobName: ScheduledJobName): Promise<JobHistoryEntry[]> {
+    return this.schedulerManager.getJobHistory(jobName);
+  }
+
+  // --- Refactoring ---
+
+  public async scanForViolations(): Promise<ViolationReport> {
+    return this.refactoringManager.scanForViolations(this.workspacePath);
+  }
+
+  public async getViolationReport(): Promise<ViolationReport | null> {
+    return this.refactoringManager.getViolationReport();
+  }
+
+  public async generateRefactoringPR(violationType: ViolationType): Promise<RefactoringRun> {
+    return this.refactoringManager.generateRefactoringPR(violationType);
+  }
+
+  public async getRefactoringHistory(): Promise<RefactoringHistory> {
+    return this.refactoringManager.getRefactoringHistory();
+  }
+
+  // --- GitHub Review Poster ---
+
+  public async postPRReview(
+    prNumber: number,
+    findings: ReviewFindingInput[],
+    verdict: ReviewVerdict,
+  ): Promise<PostReviewResult> {
+    return this.githubReviewPoster.postReview(prNumber, findings, verdict);
+  }
+
+  public async postPRSummary(
+    prNumber: number,
+    qualityScore: QualityScoreInput,
+    evalResult: EvalResultInput,
+  ): Promise<PostSummaryResult> {
+    return this.githubReviewPoster.postSummaryComment(prNumber, qualityScore, evalResult);
+  }
+
+  public async getPRReviewStatus(prNumber: number): Promise<PRReviewStatus> {
+    return this.githubReviewPoster.getReviewStatus(prNumber);
   }
 }

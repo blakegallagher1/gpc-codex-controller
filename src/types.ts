@@ -283,6 +283,10 @@ export interface CIRunRecord {
   duration_ms: number;
   failureCount: number;
   failureSummary: string[];
+  /** GitHub Actions run ID, if triggered via CI integration. */
+  ghRunId?: number | undefined;
+  /** Source of the record: "manual" for local pnpm verify, "webhook" for GH check suite, "ci" for triggered workflow. */
+  source?: "manual" | "webhook" | "ci" | undefined;
 }
 
 export interface CIStatusSummary {
@@ -291,6 +295,77 @@ export interface CIStatusSummary {
   totalRuns: number;
   passRate: number;
   recentRegressions: string[];
+}
+
+// --- CI Integration (GitHub Actions) ---
+
+export type CITriggerStatus = "pending" | "in_progress" | "completed" | "timed_out" | "failed";
+
+export interface CITriggerResult {
+  taskId: string;
+  ghRunId: number;
+  status: CITriggerStatus;
+  url: string;
+  triggeredAt: string;
+}
+
+export interface CIPollResult {
+  ghRunId: number;
+  status: CITriggerStatus;
+  conclusion: string | null;
+  passed: boolean;
+  url: string;
+  durationMs: number;
+}
+
+export interface CIFailureLogs {
+  ghRunId: number;
+  failedJobs: CIFailedJob[];
+  summary: string[];
+}
+
+export interface CIFailedJob {
+  jobName: string;
+  conclusion: string;
+  steps: CIFailedStep[];
+}
+
+export interface CIFailedStep {
+  stepName: string;
+  conclusion: string;
+  logExcerpt: string;
+}
+
+// --- PR Automerge ---
+
+export interface AutomergePolicy {
+  prefixWhitelist: string[];
+  maxLinesChanged: number;
+  requireCIGreen: boolean;
+  requireReviewApproval: boolean;
+  neverAutomergePatterns: string[];
+  updatedAt: string;
+}
+
+export interface AutomergeEvaluation {
+  eligible: boolean;
+  reason: string;
+  prNumber: number;
+  taskId: string;
+  checks: AutomergeCheck[];
+}
+
+export interface AutomergeCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface AutomergeResult {
+  prNumber: number;
+  merged: boolean;
+  strategy: "squash" | "merge" | "rebase";
+  error: string | null;
 }
 
 // --- PR Review ---
@@ -648,4 +723,229 @@ export interface AutonomousRunRecord {
   prUrl: string | null;
   reviewPassed: boolean | null;
   error: string | null;
+}
+
+// --- Turn Steering ---
+
+export interface TurnSteerParams {
+  threadId: string;
+  input: Array<{ type: string; text: string }>;
+  expectedTurnId?: string;
+}
+
+// --- Review Start ---
+
+export interface ReviewTarget {
+  type: string;
+  sha?: string;
+  baseBranch?: string;
+}
+
+export interface ReviewStartParams {
+  threadId: string;
+  delivery?: "inline" | "detached";
+  target: ReviewTarget;
+}
+
+// --- Token Usage ---
+
+export interface TokenUsageUpdate {
+  threadId: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+// --- Webhooks ---
+
+export type WebhookEventType =
+  | "issue.opened"
+  | "issue.labeled"
+  | "pull_request.opened"
+  | "pull_request.synchronize"
+  | "pull_request.closed"
+  | "check_run.completed"
+  | "push";
+
+export interface WebhookEvent {
+  type: WebhookEventType;
+  action: string;
+  payload: WebhookPayload;
+  receivedAt: string;
+}
+
+export interface WebhookPayload {
+  repository: { full_name: string; clone_url: string };
+  sender: { login: string };
+  issue?: { number: number; title: string; body: string; labels: Array<{ name: string }> };
+  pull_request?: { number: number; title: string; head: { ref: string; sha: string }; base: { ref: string }; merged: boolean };
+  check_run?: { id: number; name: string; conclusion: string | null; head_sha: string };
+  ref?: string;
+  after?: string;
+}
+
+// --- Issue Triage ---
+
+export interface IssueClassification {
+  category: "bug" | "feature" | "docs" | "refactor" | "question" | "unknown";
+  priority: "critical" | "high" | "medium" | "low";
+  confidence: number;
+  suggestedLabels: string[];
+  reasoning: string;
+}
+
+export interface IssueTriageResult {
+  issueNumber: number;
+  classification: IssueClassification;
+  autoAssigned: boolean;
+  taskCreated: boolean;
+  taskId: string | null;
+  triagedAt: string;
+}
+
+// --- CI Integration ---
+
+export type CIRunStatus = "pending" | "running" | "passed" | "failed" | "cancelled";
+
+export interface CIIntegrationResult {
+  taskId: string;
+  runId: string;
+  status: CIRunStatus;
+  checkName: string;
+  sha: string;
+  startedAt: string;
+  completedAt: string | null;
+  duration_ms: number | null;
+  passed: boolean;
+}
+
+// --- Scheduler ---
+
+export interface ScheduleConfig {
+  jobs: ScheduleJob[];
+  timezone: string;
+  updatedAt: string;
+}
+
+export interface ScheduleJob {
+  id: string;
+  name: string;
+  cron: string;
+  method: string;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  lastRun: string | null;
+  nextRun: string | null;
+  createdAt: string;
+}
+
+export interface JobHistory {
+  jobId: string;
+  jobName: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "running" | "succeeded" | "failed";
+  result: unknown | null;
+  error: string | null;
+}
+
+// --- Refactoring / Golden Principles ---
+
+export interface GoldenPrinciple {
+  id: string;
+  name: string;
+  description: string;
+  pattern: string;
+  severity: "error" | "warning";
+}
+
+export interface RefactoringViolation {
+  principle: GoldenPrinciple;
+  file: string;
+  line: number | null;
+  message: string;
+}
+
+// --- GitHub PR Comments ---
+
+export type ReviewVerdict = "approve" | "request_changes" | "comment";
+
+export interface GithubReviewPost {
+  prNumber: number;
+  repo: string;
+  verdict: ReviewVerdict;
+  body: string;
+  postedAt: string;
+}
+
+// --- Alerting ---
+
+export type AlertSeverity = "info" | "warning" | "error" | "critical";
+
+export type AlertChannelType = "slack" | "webhook" | "console";
+
+export interface AlertChannelConfig {
+  type: AlertChannelType;
+  enabled: boolean;
+  url?: string | undefined;
+}
+
+export interface AlertConfig {
+  channels: AlertChannelConfig[];
+  updatedAt: string;
+}
+
+export interface AlertEvent {
+  id: string;
+  severity: AlertSeverity;
+  source: string;
+  title: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  timestamp: string;
+  dispatched: boolean;
+  channels: AlertChannelType[];
+}
+
+export interface AlertMuteRule {
+  pattern: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
+// --- Merge Queue ---
+
+export interface MergeQueueEntry {
+  taskId: string;
+  prNumber: number;
+  priority: number;
+  branchName: string;
+  enqueuedAt: string;
+  status: "waiting" | "rebasing" | "ready" | "merging" | "merged" | "blocked";
+  conflictDetected: boolean;
+  lastCheckedAt: string | null;
+}
+
+export interface ConflictDetectionResult {
+  taskId: string;
+  hasConflicts: boolean;
+  conflictFiles: string[];
+  baseSha: string;
+  headSha: string;
+  checkedAt: string;
+}
+
+// --- Dashboard ---
+
+export interface DashboardData {
+  tasks: TaskRecord[];
+  recentAutonomousRuns: AutonomousRunRecord[];
+  qualityScores: QualityScore[];
+  ciPassRate: number;
+  alertSummary: { total: number; critical: number; error: number; warning: number; info: number };
+  mergeQueueDepth: number;
+  schedulerRunning: boolean;
+  timestamp: string;
 }

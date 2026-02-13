@@ -150,11 +150,13 @@ async function main(): Promise<void> {
       }
 
       const bearerToken = process.env.MCP_BEARER_TOKEN;
+      const webhookHandler = controller.getWebhookHandler();
       const server = await startRpcServer({
         controller,
         bindHost,
         port,
         ...(bearerToken && bearerToken.trim().length > 0 ? { bearerToken } : {}),
+        webhookHandler,
       });
 
       const baseUrl = (process.env.MCP_BASE_URL ?? "").replace(/\/+$/, "");
@@ -168,7 +170,7 @@ async function main(): Promise<void> {
           bindHost,
           port,
           mcpEndpoint,
-          routes: { health: "/healthz", rpc: "/rpc", mcp: "/mcp" },
+          routes: { health: "/healthz", rpc: "/rpc", mcp: "/mcp", webhooks: "/webhooks/github" },
           auth: bearerToken ? "bearer" : "none",
         }) + "\n",
       );

@@ -718,6 +718,432 @@ export function createMcpHandler(
   );
 
   /* ================================================================ */
+  /*  CI Integration (GitHub Actions)                                   */
+  /* ================================================================ */
+
+  mcp.tool(
+    "trigger_ci",
+    "Trigger a GitHub Actions CI workflow for a task. Returns trigger details immediately.",
+    {
+      taskId: z.string().describe("Task ID"),
+      sha: z.string().describe("Git commit SHA to trigger CI for"),
+      workflowFile: z.string().default("ci.yml").describe("Workflow file name (default: ci.yml)"),
+    },
+    async ({ taskId, sha, workflowFile }) =>
+      textResult(await controller.triggerCI(taskId, sha, workflowFile)),
+  );
+
+  mcp.tool(
+    "poll_ci_status",
+    "Poll a GitHub Actions run until it completes or times out. Returns a jobId (long-running).",
+    {
+      taskId: z.string().describe("Task ID"),
+      ghRunId: z.number().int().describe("GitHub Actions run ID"),
+      timeoutMs: z.number().int().min(10000).max(1800000).default(600000).describe("Poll timeout in ms"),
+    },
+    async ({ taskId, ghRunId, timeoutMs }) =>
+      textResult(enqueue("ci/poll", () => controller.pollCIStatus(taskId, ghRunId, timeoutMs))),
+  );
+
+  mcp.tool(
+    "get_ci_failure_logs",
+    "Get failure logs from a completed GitHub Actions run.",
+    {
+      taskId: z.string().describe("Task ID"),
+      ghRunId: z.number().int().describe("GitHub Actions run ID"),
+    },
+    async ({ taskId, ghRunId }) =>
+      textResult(await controller.getCIFailureLogs(taskId, ghRunId)),
+  );
+
+  mcp.tool(
+    "trigger_and_wait_ci",
+    "Trigger CI and poll until completion. Returns a jobId (long-running).",
+    {
+      taskId: z.string().describe("Task ID"),
+      sha: z.string().describe("Git commit SHA"),
+      workflowFile: z.string().default("ci.yml").describe("Workflow file name"),
+      timeoutMs: z.number().int().min(10000).max(1800000).default(600000).describe("Poll timeout in ms"),
+    },
+    async ({ taskId, sha, workflowFile, timeoutMs }) =>
+      textResult(enqueue("ci/triggerAndWait", () =>
+        controller.triggerAndWaitCI(taskId, sha, workflowFile, timeoutMs),
+      )),
+  );
+
+  /* ================================================================ */
+  /*  PR Automerge                                                      */
+  /* ================================================================ */
+
+  mcp.tool(
+    "evaluate_automerge",
+    "Evaluate whether a PR is eligible for automatic merging based on policy.",
+    {
+      taskId: z.string().describe("Task ID"),
+      prNumber: z.number().int().describe("Pull request number"),
+    },
+    async ({ taskId, prNumber }) =>
+      textResult(await controller.evaluateAutomerge(taskId, prNumber)),
+  );
+
+  mcp.tool(
+    "execute_merge",
+    "Execute a merge for a PR (squash/merge/rebase). Only call after evaluate_automerge returns eligible.",
+    {
+      taskId: z.string().describe("Task ID"),
+      prNumber: z.number().int().describe("Pull request number"),
+      strategy: z.enum(["squash", "merge", "rebase"]).default("squash").describe("Merge strategy"),
+    },
+    async ({ taskId, prNumber, strategy }) =>
+      textResult(await controller.executeMerge(taskId, prNumber, strategy)),
+  );
+
+  mcp.tool(
+    "get_automerge_policy",
+    "Get the current PR automerge policy (prefix whitelist, max diff size, requirements).",
+    {},
+    async () => textResult(await controller.getAutomergePolicy()),
+  );
+
+  mcp.tool(
+    "set_automerge_policy",
+    "Update the PR automerge policy.",
+    {
+      prefixWhitelist: z.array(z.string()).optional().describe("Commit prefixes eligible for automerge"),
+      maxLinesChanged: z.number().int().optional().describe("Max diff lines for automerge (default: 500)"),
+      requireCIGreen: z.boolean().optional().describe("Require CI to pass (default: true)"),
+      requireReviewApproval: z.boolean().optional().describe("Require review approval (default: true)"),
+      neverAutomergePatterns: z.array(z.string()).optional().describe("Patterns that block automerge"),
+    },
+    async (params) => {
+      const updates: Record<string, unknown> = {};
+      if (params.prefixWhitelist !== undefined) updates.prefixWhitelist = params.prefixWhitelist;
+      if (params.maxLinesChanged !== undefined) updates.maxLinesChanged = params.maxLinesChanged;
+      if (params.requireCIGreen !== undefined) updates.requireCIGreen = params.requireCIGreen;
+      if (params.requireReviewApproval !== undefined) updates.requireReviewApproval = params.requireReviewApproval;
+      if (params.neverAutomergePatterns !== undefined) updates.neverAutomergePatterns = params.neverAutomergePatterns;
+      return textResult(await controller.setAutomergePolicy(updates as Partial<import("./types.js").AutomergePolicy>));
+    },
+  );
+
+  /* ================================================================ */
+  /*  Issue Triage                                                      */
+  /* ================================================================ */
+
+  mcp.tool(
+    "triage_issue",
+    "Auto-classify a GitHub issue as bug/feature/refactor, estimate complexity, apply labels, and post a triage summary comment.",
+    {
+      issueNumber: z.number().int().describe("GitHub issue number"),
+      title: z.string().describe("Issue title"),
+      body: z.string().default("").describe("Issue body text"),
+      repo: z.string().default("").describe("Repository full name (owner/repo)"),
+      author: z.string().default("unknown").describe("Issue author login"),
+      url: z.string().default("").describe("Issue HTML URL"),
+    },
+    async ({ issueNumber, title, body, repo, author, url }) =>
+      textResult(await controller.triageIssue({
+        issueNumber, title, body, repo, author, url, existingLabels: [],
+      })),
+  );
+
+  mcp.tool(
+    "get_triage_history",
+    "Get recent issue triage history.",
+    { limit: z.number().int().min(1).max(100).default(50).describe("Max entries to return") },
+    async ({ limit }) => textResult(await controller.getTriageHistory(limit)),
+  );
+
+  mcp.tool(
+    "convert_issue_to_task",
+    "Convert a triaged GitHub issue into an internal task and start autonomous processing. Returns a jobId (long-running).",
+    {
+      issueNumber: z.number().int().describe("GitHub issue number"),
+      title: z.string().describe("Issue title"),
+      body: z.string().default("").describe("Issue body text"),
+      repo: z.string().default("").describe("Repository full name (owner/repo)"),
+      author: z.string().default("unknown").describe("Issue author login"),
+      url: z.string().default("").describe("Issue HTML URL"),
+    },
+    async ({ issueNumber, title, body, repo, author, url }) =>
+      textResult(enqueue("triage/convertToTask", () =>
+        controller.convertIssueToTask({
+          issueNumber, title, body, repo, author, url, existingLabels: [],
+        }),
+      )),
+  );
+
+  /* ================================================================ */
+  /*  Alerting                                                         */
+  /* ================================================================ */
+
+  mcp.tool(
+    "send_alert",
+    "Send an alert to configured channels (Slack, webhook, console).",
+    {
+      severity: z.enum(["info", "warning", "error", "critical"]).default("info").describe("Alert severity"),
+      source: z.string().default("manual").describe("Source of the alert"),
+      title: z.string().describe("Alert title"),
+      message: z.string().describe("Alert message"),
+    },
+    async ({ severity, source, title, message }) =>
+      textResult(await controller.sendAlert({ severity, source, title, message })),
+  );
+
+  mcp.tool(
+    "get_alert_config",
+    "Get the current alerting configuration (channels, settings).",
+    {},
+    async () => textResult(await controller.getAlertConfig()),
+  );
+
+  mcp.tool(
+    "set_alert_config",
+    "Update alert channel configuration.",
+    {
+      channels: z.array(z.object({
+        type: z.enum(["slack", "webhook", "console"]).describe("Channel type"),
+        enabled: z.boolean().describe("Whether channel is enabled"),
+        url: z.string().optional().describe("Webhook URL (for slack/webhook types)"),
+      })).describe("Alert channel configurations"),
+    },
+    async ({ channels }) => textResult(await controller.setAlertConfig({ channels })),
+  );
+
+  mcp.tool(
+    "get_alert_history",
+    "Get recent alert history.",
+    { limit: z.number().int().min(1).max(500).default(50).describe("Max entries") },
+    async ({ limit }) => textResult(await controller.getAlertHistory(limit)),
+  );
+
+  mcp.tool(
+    "mute_alert",
+    "Temporarily suppress alerts matching a pattern.",
+    {
+      pattern: z.string().describe("Pattern to match alert titles against"),
+      durationMs: z.number().int().min(60000).default(3600000).describe("Mute duration in ms (default: 1 hour)"),
+    },
+    async ({ pattern, durationMs }) => textResult(await controller.muteAlert(pattern, durationMs)),
+  );
+
+  /* ================================================================ */
+  /*  Merge Queue                                                      */
+  /* ================================================================ */
+
+  mcp.tool(
+    "enqueue_merge",
+    "Add a PR to the merge queue.",
+    {
+      taskId: z.string().describe("Task ID"),
+      prNumber: z.number().int().describe("Pull request number"),
+      priority: z.number().int().min(0).max(100).default(50).describe("Queue priority (0=lowest, 100=highest)"),
+    },
+    async ({ taskId, prNumber, priority }) =>
+      textResult(await controller.enqueueMerge(taskId, prNumber, priority)),
+  );
+
+  mcp.tool(
+    "dequeue_merge",
+    "Get the next PR to merge from the queue.",
+    {},
+    async () => textResult(await controller.dequeueMerge()),
+  );
+
+  mcp.tool(
+    "check_freshness",
+    "Check if a task's branch is up-to-date with main.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.checkMergeFreshness(taskId)),
+  );
+
+  mcp.tool(
+    "rebase_onto_main",
+    "Rebase a task's branch onto the latest main.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.rebaseOntoMain(taskId)),
+  );
+
+  mcp.tool(
+    "detect_conflicts",
+    "Check for merge conflicts in a task's branch.",
+    { taskId: z.string().describe("Task ID") },
+    async ({ taskId }) => textResult(await controller.detectMergeConflicts(taskId)),
+  );
+
+  mcp.tool(
+    "get_merge_queue_status",
+    "Get current merge queue status (entries, depth, blocked/ready counts).",
+    {},
+    async () => textResult(await controller.getMergeQueueStatus()),
+  );
+
+  /* ================================================================ */
+  /*  Scheduler                                                        */
+  /* ================================================================ */
+
+  mcp.tool(
+    "start_scheduler",
+    "Start the background job scheduler (quality-scan, architecture-sweep, doc-gardening, gc-sweep).",
+    {},
+    async () => textResult(await controller.startScheduler()),
+  );
+
+  mcp.tool(
+    "stop_scheduler",
+    "Stop the background job scheduler.",
+    {},
+    async () => textResult(await controller.stopScheduler()),
+  );
+
+  mcp.tool(
+    "get_schedule_status",
+    "Get current scheduler status and job configurations.",
+    {},
+    async () => textResult(await controller.getScheduleStatus()),
+  );
+
+  mcp.tool(
+    "trigger_scheduled_job",
+    "Manually trigger a scheduled job immediately.",
+    {
+      jobName: z.enum(["quality-scan", "architecture-sweep", "doc-gardening", "gc-sweep"]).describe("Job to trigger"),
+    },
+    async ({ jobName }) => textResult(await controller.triggerScheduledJob(jobName)),
+  );
+
+  mcp.tool(
+    "set_job_interval",
+    "Change the interval for a scheduled job.",
+    {
+      jobName: z.enum(["quality-scan", "architecture-sweep", "doc-gardening", "gc-sweep"]).describe("Job name"),
+      intervalMs: z.number().int().min(60000).describe("New interval in ms (minimum 1 minute)"),
+    },
+    async ({ jobName, intervalMs }) => textResult(await controller.setJobInterval(jobName, intervalMs)),
+  );
+
+  mcp.tool(
+    "get_job_history",
+    "Get run history for a scheduled job.",
+    {
+      jobName: z.enum(["quality-scan", "architecture-sweep", "doc-gardening", "gc-sweep"]).describe("Job name"),
+    },
+    async ({ jobName }) => textResult(await controller.getJobHistory(jobName)),
+  );
+
+  /* ================================================================ */
+  /*  Refactoring (Golden Principles)                                  */
+  /* ================================================================ */
+
+  mcp.tool(
+    "scan_violations",
+    "Scan the workspace for golden principle violations (duplicate helpers, untyped boundaries, import hygiene, dead code, duplicate logic).",
+    {},
+    async () => textResult(await controller.scanForViolations()),
+  );
+
+  mcp.tool(
+    "get_violation_report",
+    "Get the most recent violation scan report.",
+    {},
+    async () => textResult(await controller.getViolationReport()),
+  );
+
+  mcp.tool(
+    "generate_refactoring_pr",
+    "Generate a refactoring prompt for a specific violation type. Returns a jobId.",
+    {
+      violationType: z.enum(["duplicate-helper", "untyped-boundary", "import-hygiene", "dead-code", "duplicate-logic"]).describe("Type of violation to address"),
+    },
+    async ({ violationType }) =>
+      textResult(enqueue("refactoring/generate", () => controller.generateRefactoringPR(violationType))),
+  );
+
+  mcp.tool(
+    "get_refactoring_history",
+    "Get history of refactoring runs.",
+    {},
+    async () => textResult(await controller.getRefactoringHistory()),
+  );
+
+  /* ================================================================ */
+  /*  GitHub Review Poster                                             */
+  /* ================================================================ */
+
+  mcp.tool(
+    "post_pr_review",
+    "Post a PR review with inline comments to GitHub.",
+    {
+      prNumber: z.number().int().describe("Pull request number"),
+      findings: z.array(z.object({
+        file: z.string().describe("File path"),
+        line: z.number().int().nullable().describe("Line number (null for file-level)"),
+        severity: z.enum(["error", "warning", "suggestion"]).describe("Finding severity"),
+        message: z.string().describe("Finding message"),
+        rule: z.string().describe("Rule that triggered this finding"),
+      })).describe("Review findings"),
+      verdict: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).describe("Review verdict"),
+    },
+    async ({ prNumber, findings, verdict }) =>
+      textResult(await controller.postPRReview(prNumber, findings, verdict)),
+  );
+
+  mcp.tool(
+    "post_pr_summary",
+    "Post a quality score summary comment on a PR.",
+    {
+      prNumber: z.number().int().describe("Pull request number"),
+      qualityScore: z.object({
+        overall: z.number().describe("Overall quality score (0-1)"),
+        breakdown: z.object({
+          eval: z.number().describe("Eval score"),
+          ci: z.number().describe("CI score"),
+          lint: z.number().describe("Lint score"),
+          architecture: z.number().describe("Architecture score"),
+          docs: z.number().describe("Docs score"),
+        }),
+      }).describe("Quality score data"),
+      evalResult: z.object({
+        passed: z.boolean().describe("Whether eval passed"),
+        overallScore: z.number().describe("Overall eval score"),
+        checkCount: z.number().int().describe("Total checks"),
+        passedCount: z.number().int().describe("Passed checks"),
+      }).describe("Eval result data"),
+    },
+    async ({ prNumber, qualityScore, evalResult }) =>
+      textResult(await controller.postPRSummary(prNumber, qualityScore, evalResult)),
+  );
+
+  mcp.tool(
+    "get_pr_review_status",
+    "Get the current review status of a PR.",
+    { prNumber: z.number().int().describe("Pull request number") },
+    async ({ prNumber }) => textResult(await controller.getPRReviewStatus(prNumber)),
+  );
+
+  /* ================================================================ */
+  /*  Webhook Audit                                                    */
+  /* ================================================================ */
+
+  mcp.tool(
+    "get_webhook_audit_log",
+    "Get recent webhook event audit log.",
+    { limit: z.number().int().min(1).max(500).default(50).describe("Max entries") },
+    async ({ limit }) => textResult(controller.getWebhookAuditLog(limit)),
+  );
+
+  /* ================================================================ */
+  /*  Dashboard                                                        */
+  /* ================================================================ */
+
+  mcp.tool(
+    "get_dashboard",
+    "Get aggregate system dashboard (tasks, autonomous runs, CI rates, alerts, merge queue, scheduler).",
+    {},
+    async () => textResult(await controller.getDashboard()),
+  );
+
+  /* ================================================================ */
   /*  Request handler                                                  */
   /* ================================================================ */
 
