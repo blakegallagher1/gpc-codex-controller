@@ -129,7 +129,7 @@ interface ControllerOptions {
 const VERIFY_JSON_FILENAME = ".agent-verify.json";
 const VERIFY_OUTPUT_TAIL_LINES = 120;
 const TURN_TIMEOUT_MS = 20 * 60_000;
-const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspaceWrite" };
+const TURN_WORKSPACE_SANDBOX: WorkspaceWriteTurnSandboxPolicy = { type: "workspace-write" };
 const MAX_TURNS_PER_TASK = 5;
 const MAX_IDENTICAL_FIX_DIFFS = 3;
 const BLOCKED_ROOT_FILES = new Set(["package.json", "tsconfig.json", "eslint.config.mjs", "coordinator.ts"]);
@@ -805,8 +805,17 @@ export class Controller extends EventEmitter {
     });
   }
 
-  private normalizeThreadSandboxPolicy(): "workspaceWrite" | "readOnly" | "dangerFullAccess" {
-    return this.sandboxPolicy === "workspace-write" ? "workspaceWrite" : "workspaceWrite";
+  private normalizeThreadSandboxPolicy(): "workspace-write" | "read-only" | "danger-full-access" {
+    switch (this.sandboxPolicy) {
+      case "readOnly":
+      case "read-only":
+        return "read-only";
+      case "dangerFullAccess":
+      case "danger-full-access":
+        return "danger-full-access";
+      default:
+        return "workspace-write";
+    }
   }
 
   private async executeTurn(args: {

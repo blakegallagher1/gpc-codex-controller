@@ -71,8 +71,8 @@ export interface LoginCompletedParams {
   error: string | null;
 }
 
-// Must match codex app-server enum variants.
-export type SandboxPolicy = "workspaceWrite" | "readOnly" | "dangerFullAccess" | "workspace-write";
+// Must match codex app-server enum variants (kebab-case).
+export type SandboxPolicy = "workspace-write" | "read-only" | "danger-full-access" | "workspaceWrite" | "readOnly" | "dangerFullAccess";
 export type ApprovalPolicy = "never";
 
 export interface ThreadStartParams {
@@ -113,8 +113,8 @@ export interface TurnStartParams {
 }
 
 export interface WorkspaceWriteTurnSandboxPolicy {
-  // Must match codex app-server enum variants.
-  type: "workspaceWrite";
+  // Must match codex app-server enum variants (kebab-case).
+  type: "workspace-write";
   writableRoots?: string[];
   networkAccess?: boolean;
   excludeTmpdirEnvVar?: boolean;
