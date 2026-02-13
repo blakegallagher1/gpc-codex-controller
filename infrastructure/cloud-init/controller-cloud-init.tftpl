@@ -18,7 +18,7 @@ write_files:
     owner: root:${controller_user}
     permissions: "0640"
     content: |
-${indent(6, controller_env_lines)}
+      ${replace(controller_env_lines, "\n", "\n      ")}
 
   - path: /etc/default/cloudflared
     owner: root:${controller_user}
@@ -30,13 +30,13 @@ ${indent(6, controller_env_lines)}
     owner: root:root
     permissions: "0644"
     content: |
-${indent(6, controller_service_unit)}
+      ${replace(controller_service_unit, "\n", "\n      ")}
 
   - path: /etc/systemd/system/cloudflared.service
     owner: root:root
     permissions: "0644"
     content: |
-${indent(6, cloudflared_service_unit)}
+      ${replace(cloudflared_service_unit, "\n", "\n      ")}
 
 runcmd:
   - [bash, -lc, "apt-get update"]
