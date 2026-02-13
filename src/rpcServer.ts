@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Controller } from "./controller.js";
 import { createMcpHandler, type JobRecord } from "./mcpServer.js";
 import type { WebhookHandler } from "./webhookHandler.js";
+import { OAuthProvider } from "./oauthProvider.js";
 
 // We intentionally keep JSON-RPC payloads permissive and rely on JSON.stringify
 // at the boundary, rather than trying to perfectly model "JSON serializable" in TS.
@@ -30,6 +31,8 @@ export interface RpcServerOptions {
   bearerToken?: string;
   shutdownGraceMs?: number;
   webhookHandler?: WebhookHandler;
+  /** External base URL (e.g. https://codex-controller.gallagherpropco.com) for OAuth issuer. */
+  externalBaseUrl: string | undefined;
 }
 
 function jsonRpcError(id: JsonValue | null, code: number, message: string, data?: JsonValue): JsonRpcResponse {
@@ -755,6 +758,12 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
   const jobs = new Map<string, JobRecord>();
   const mcpHandler = createMcpHandler(options.controller, jobs);
 
+  // OAuth 2.1 provider for ChatGPT MCP connector integration.
+  // Falls back to a localhost issuer if no external URL is configured.
+  const oauthIssuer = options.externalBaseUrl?.replace(/\/+$/, "")
+    || `http://${options.bindHost}:${options.port}`;
+  const oauth = new OAuthProvider(oauthIssuer);
+
   const startJob = (method: string, fn: () => Promise<JsonValue>): JobRecord => {
     const job: JobRecord = {
       jobId: newJobId(),
@@ -791,6 +800,74 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
         return;
       }
 
+      // ---- OAuth 2.1 Discovery & Endpoints (no auth required) ----
+
+      if (req.method === "GET" && req.url === "/.well-known/oauth-protected-resource") {
+        res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+        res.end(JSON.stringify(oauth.getProtectedResourceMetadata()));
+        return;
+      }
+
+      if (req.method === "GET" && req.url === "/.well-known/oauth-authorization-server") {
+        res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
+        res.end(JSON.stringify(oauth.getAuthorizationServerMetadata()));
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/oauth/register") {
+        const body = await readBody(req, 64 * 1024);
+        const parsed = safeJsonParse(body) as Record<string, unknown>;
+        const result = oauth.registerClient(parsed);
+        res.writeHead(201, { "content-type": "application/json", "access-control-allow-origin": "*" });
+        res.end(JSON.stringify(result));
+        return;
+      }
+
+      if (req.method === "GET" && req.url?.startsWith("/oauth/authorize")) {
+        const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const result = oauth.authorize(url.searchParams);
+        if ("redirectUrl" in result) {
+          res.writeHead(302, { location: result.redirectUrl });
+          res.end();
+        } else {
+          res.writeHead(result.status, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: result.error, error_description: result.errorDescription }));
+        }
+        return;
+      }
+
+      if (req.method === "POST" && req.url === "/oauth/token") {
+        const body = await readBody(req, 64 * 1024);
+        const contentType = req.headers["content-type"] || "";
+        let parsed: Record<string, string>;
+        if (contentType.includes("application/x-www-form-urlencoded")) {
+          parsed = Object.fromEntries(new URLSearchParams(body));
+        } else {
+          parsed = safeJsonParse(body) as Record<string, string>;
+        }
+        const result = oauth.exchangeToken(parsed);
+        if ("token" in result) {
+          res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+          res.end(JSON.stringify(result.token));
+        } else {
+          res.writeHead(result.status, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: result.error, error_description: result.errorDescription }));
+        }
+        return;
+      }
+
+      // CORS preflight for OAuth endpoints
+      if (req.method === "OPTIONS" && (req.url?.startsWith("/oauth/") || req.url?.startsWith("/.well-known/"))) {
+        res.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+          "access-control-allow-headers": "Content-Type, Authorization",
+          "access-control-max-age": "86400",
+        });
+        res.end();
+        return;
+      }
+
       // Dashboard endpoint — returns aggregate system status.
       if (req.method === "GET" && req.url === "/dashboard") {
         try {
@@ -816,9 +893,28 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
         return;
       }
 
-      // MCP Streamable HTTP — no bearer auth (CF Access secures the path;
-      // ChatGPT Apps connect without bearer tokens in "No Auth" mode).
+      // MCP Streamable HTTP — accepts OAuth tokens, static bearer token, or no auth.
+      // ChatGPT connects via OAuth; direct callers use the static bearer token;
+      // CF Access bypass allows unauthenticated health/discovery probes.
       if (req.url === "/mcp" || req.url?.startsWith("/mcp?")) {
+        // If a bearer token is present, verify it's either the static bearer
+        // or an OAuth-issued token. If neither matches, reject.
+        const authHeader = req.headers.authorization;
+        if (authHeader) {
+          const [scheme, token] = authHeader.split(" ");
+          if (scheme === "Bearer" && token) {
+            const isStaticToken = options.bearerToken && token === options.bearerToken;
+            const isOAuthToken = oauth.verifyToken(token);
+            if (!isStaticToken && !isOAuthToken) {
+              res.writeHead(401, {
+                "content-type": "application/json",
+                "www-authenticate": `Bearer resource_metadata="${oauthIssuer}/.well-known/oauth-protected-resource"`,
+              });
+              res.end(JSON.stringify({ error: "invalid_token", error_description: "Token is invalid or expired" }));
+              return;
+            }
+          }
+        }
         await mcpHandler(req, res);
         return;
       }

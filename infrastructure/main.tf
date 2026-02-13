@@ -11,6 +11,7 @@ locals {
       CONTROLLER_PORT          = tostring(var.controller_port)
       CONTROLLER_START_COMMAND = var.controller_start_command
       MCP_BEARER_TOKEN         = var.mcp_bearer_token
+      MCP_BASE_URL             = "https://${local.endpoint_hostname}"
     },
     var.github_token != "" ? { GITHUB_TOKEN = var.github_token } : {}
   )

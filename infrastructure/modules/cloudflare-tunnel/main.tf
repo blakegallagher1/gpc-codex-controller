@@ -177,6 +177,50 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
   }
 }
 
+# OAuth 2.1 endpoints must be publicly reachable for ChatGPT MCP connector.
+
+resource "cloudflare_zero_trust_access_application" "oauth" {
+  count      = var.enable_access ? 1 : 0
+  account_id = var.account_id
+  name       = "${var.name}-oauth-access"
+  domain     = "${var.hostname}/oauth"
+  type       = "self_hosted"
+
+  session_duration = "24h"
+
+  policies = [
+    { id = cloudflare_zero_trust_access_policy.mcp_bypass[0].id }
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes = [
+      policies
+    ]
+  }
+}
+
+resource "cloudflare_zero_trust_access_application" "wellknown" {
+  count      = var.enable_access ? 1 : 0
+  account_id = var.account_id
+  name       = "${var.name}-wellknown-access"
+  domain     = "${var.hostname}/.well-known"
+  type       = "self_hosted"
+
+  session_duration = "24h"
+
+  policies = [
+    { id = cloudflare_zero_trust_access_policy.mcp_bypass[0].id }
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes = [
+      policies
+    ]
+  }
+}
+
 # ---------------------------------------------------------------------------
 # DNS
 # ---------------------------------------------------------------------------

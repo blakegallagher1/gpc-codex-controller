@@ -150,6 +150,7 @@ async function main(): Promise<void> {
       }
 
       const bearerToken = process.env.MCP_BEARER_TOKEN;
+      const externalBaseUrl = process.env.MCP_BASE_URL || undefined;
       const webhookHandler = controller.getWebhookHandler();
       const server = await startRpcServer({
         controller,
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
         port,
         ...(bearerToken && bearerToken.trim().length > 0 ? { bearerToken } : {}),
         webhookHandler,
+        externalBaseUrl,
       });
 
       const baseUrl = (process.env.MCP_BASE_URL ?? "").replace(/\/+$/, "");
