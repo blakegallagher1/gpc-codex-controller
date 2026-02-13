@@ -51,6 +51,8 @@ if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || "${TERRAFORM_APPLY}" != "
   exit 0
 fi
 
+CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-${TF_VAR_cloudflare_account_id:-}}"
+CLOUDFLARE_ZONE_ID="${CLOUDFLARE_ZONE_ID:-${TF_VAR_cloudflare_zone_id:-}}"
 require_env_var CLOUDFLARE_ACCOUNT_ID
 require_env_var CLOUDFLARE_ZONE_ID
 require_env_var CLOUDFLARE_API_TOKEN
