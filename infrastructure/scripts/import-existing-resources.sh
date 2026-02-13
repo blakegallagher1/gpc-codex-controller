@@ -226,7 +226,7 @@ import_if_needed "module.hetzner_vm.hcloud_volume.workspaces" "${HCLOUD_VOLUME_I
 import_if_needed "module.cloudflare_tunnel.cloudflare_dns_record.this" "${CF_DNS_IMPORT_ID}"
 
 if [[ "${ENABLE_ACCESS}" == "true" ]]; then
-  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_service_token.this[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_ID}"
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_service_token.this[0]" "accounts/${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_ID}"
   import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_policy.service_token[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_POLICY_ID}"
   import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_application.this[0]" "accounts/${CLOUDFLARE_ACCOUNT_ID}/${CF_ACCESS_APP_ID}"
   import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_policy.mcp_bypass[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_MCP_BYPASS_POLICY_ID}"
