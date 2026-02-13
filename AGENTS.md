@@ -256,3 +256,23 @@ To add an agent:
 3. Add a service wrapper method in the controller
 4. Add tests for expected behavior
 5. Document in this file
+
+## Learning Notes (added by Codex)
+
+- The repository is organized around **specialized agents** that run as Codex/App-Server workflows (provisioning, networking, deployment, mutation, PR automation, shell execution, and autonomous orchestration).
+- Most high-impact work is expected to be delivered through typed agent prompts with explicit context, constraints, expected outputs, and failure handling instructions.
+- Controller orchestration is iterative and verification-first: mutation work should run verification (`pnpm verify` is the canonical loop signal in the doc) and then apply corrective fixes.
+- A strict boundary model exists:
+  - preserve workspace/repo boundaries
+  - avoid root-wide edits unless absolutely required
+  - prefer minimal changes
+  - avoid destructive file operations outside expected locations
+- Naming conventions are expected to be domain-prefixed (`infra/*`, `cloudflare/*`, `controller/*`, `mutation/*`, `pr/*`) for discoverability and routing.
+- Security posture requires credentials to come from environment/secret systems only; no hard-coded tokens.
+- Shell execution is intentionally constrained by allowlists, denylists, command timeouts, and concurrency limits.
+- Autonomous orchestration is a first-class workflow: plan → execute phase turns → fix-until-green → quality gates → commit → PR → review loop.
+- Current explicit dependency from this playbook: **no hard-coded credentials**, and controller/CI actions are expected to be traceable via run records and smoke tests.
+- Current autonomous failure learnings:
+  - Phase transitions previously failed on `verifying -> mutating` and `failed -> mutating`; transitions were widened so multi-phase execution can recover.
+  - Early-phase planning turns should not be forced through verification/fix loops, which can trigger root-guardrail false failures before implementation.
+  - Root file scope constraints must be explicitly injected into phase prompts to prevent accidental edits of blocked files (e.g., `package.json`).

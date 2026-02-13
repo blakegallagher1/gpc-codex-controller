@@ -130,6 +130,8 @@ export class AutonomousOrchestrator {
         }
 
         const phase = plan.phases[i] as PlanPhase;
+        const isAnalysisPhase = phase.name.trim().toLowerCase() === "analysis";
+        record.status = "executing";
         const phaseStart = Date.now();
 
         await this.controller.updatePlanPhase(record.taskId, i, "in_progress");
@@ -169,38 +171,56 @@ export class AutonomousOrchestrator {
           const turnResult = await this.controller.continueTask(task.threadId, phasePrompt);
           phaseResult.turnId = turnResult.turnId;
 
-          // Verify
-          await this.controller.updateTaskStatus(record.taskId, "verifying");
-          const verifyResult = await this.controller.runVerify(record.taskId);
-
-          if (verifyResult.success) {
+          if (isAnalysisPhase) {
+            // Analysis is planning-only and should not mutate files.
             phaseResult.verifyPassed = true;
+            await this.controller.updatePlanPhase(record.taskId, i, "completed");
+            consecutiveFailures = 0;
           } else {
-            // Fix loop
-            const fixResult = await this.controller.fixUntilGreen(record.taskId, maxPhaseFixes);
-            phaseResult.fixIterations = fixResult.iterations;
-            phaseResult.verifyPassed = fixResult.success;
+            // Verify
+            await this.controller.updateTaskStatus(record.taskId, "verifying");
+            const verifyResult = await this.controller.runVerify(record.taskId);
 
-            if (!fixResult.success) {
-              phaseResult.status = "failed";
-              phaseResult.error = `Verification did not pass after ${fixResult.iterations} fix iterations`;
-              await this.controller.updatePlanPhase(record.taskId, i, "failed");
-              // Continue to next phase — partial success is better than total failure
+            if (verifyResult.success) {
+              phaseResult.verifyPassed = true;
+            } else {
+              // Fix loop
+              const fixResult = await this.controller.fixUntilGreen(record.taskId, maxPhaseFixes);
+              phaseResult.fixIterations = fixResult.iterations;
+              phaseResult.verifyPassed = fixResult.success;
+
+              if (!fixResult.success) {
+                phaseResult.status = "failed";
+                phaseResult.error = `Verification did not pass after ${fixResult.iterations} fix iterations`;
+                await this.controller.updatePlanPhase(record.taskId, i, "failed");
+                // Continue to next phase — partial success is better than total failure
+              }
+            }
+
+            if (phaseResult.status === "completed") {
+              await this.controller.updatePlanPhase(record.taskId, i, "completed");
+              consecutiveFailures = 0;
+            } else {
+              consecutiveFailures++;
             }
           }
 
-          if (phaseResult.status === "completed") {
-            await this.controller.updatePlanPhase(record.taskId, i, "completed");
-            consecutiveFailures = 0;
-
-            // Checkpoint after successful phase
+          if (phaseResult.status === "completed" && !isAnalysisPhase) {
+            // Checkpoint after successful non-analysis phase
             try {
               await this.controller.checkpointTask(record.taskId, `Phase ${i}: ${phase.name} completed`);
             } catch {
               // Non-critical
             }
-          } else {
-            consecutiveFailures++;
+          }
+
+          if (isAnalysisPhase && phaseResult.status === "completed") {
+            // Analysis checkpoints are lightweight and do not gate on repository verification.
+            try {
+              await this.controller.checkpointTask(record.taskId, `Phase ${i}: ${phase.name} completed`);
+            } catch {
+              // Non-critical
+            }
           }
         } catch (error) {
           phaseResult.status = "failed";
@@ -240,7 +260,9 @@ export class AutonomousOrchestrator {
       }
 
       // Abort if zero phases succeeded
-      const anyPhaseSucceeded = record.phases.some((p) => p.status === "completed");
+      const anyPhaseSucceeded = record.phases.some(
+        (p) => p.phaseName.trim().toLowerCase() !== "analysis" && p.status === "completed",
+      );
       if (!anyPhaseSucceeded) {
         throw new Error("All phases failed — no changes to commit");
       }
@@ -345,6 +367,8 @@ export class AutonomousOrchestrator {
     totalPhases: number,
     previousResults: AutonomousPhaseResult[],
   ): Promise<string> {
+    const isAnalysisPhase = phase.name.trim().toLowerCase() === "analysis";
+
     // Get enriched base prompt (includes skill routing, memory, secrets, reference docs)
     const basePrompt = await this.controller.buildMutationPrompt(objective);
 
@@ -354,6 +378,11 @@ export class AutonomousOrchestrator {
       `--- AUTONOMOUS PHASE ${phaseIndex + 1}/${totalPhases}: ${phase.name} ---`,
       "",
       `Phase goal: ${phase.description}`,
+      "",
+      "Global constraints for all phases:",
+      "- Only modify files needed for the objective.",
+      "- Do not modify repository root files unless the objective explicitly requests it.",
+      "- In particular, never edit root-level package.json, tsconfig.json, eslint.config.mjs, or coordinator.ts.",
       "",
     ];
 
@@ -368,14 +397,25 @@ export class AutonomousOrchestrator {
       sections.push("");
     }
 
-    sections.push(
-      "Phase instructions:",
-      `1. Focus ONLY on the "${phase.name}" phase described above.`,
-      "2. Build on any work completed in previous phases.",
-      "3. Make minimal, correct changes.",
-      "4. Ensure all changes pass verification (pnpm verify).",
-      "5. Follow existing code conventions and architecture.",
-    );
+    if (isAnalysisPhase) {
+      sections.push(
+        "Phase instructions:",
+        `1. Focus ONLY on the "${phase.name}" phase described above.`,
+        "2. Do not edit files in this phase; produce implementation planning and affected-file strategy only.",
+        "3. Confirm required touchpoints and dependencies, and identify exact edit locations.",
+        "4. Do not propose or apply fixes here; reserve fixes for later phases.",
+        "5. Follow existing code conventions and architecture.",
+      );
+    } else {
+      sections.push(
+        "Phase instructions:",
+        `1. Focus ONLY on the "${phase.name}" phase described above.`,
+        "2. Build on any work completed in previous phases.",
+        "3. Make minimal, correct changes.",
+        "4. Ensure all changes pass verification (pnpm verify).",
+        "5. Follow existing code conventions and architecture.",
+      );
+    }
 
     return sections.join("\n");
   }

@@ -92,6 +92,7 @@ interface ControllerOptions {
   sandboxPolicy?: SandboxPolicy;
   approvalPolicy?: ApprovalPolicy;
   loginTimeoutMs?: number;
+  workspacesRoot?: string;
   workspaceManager?: WorkspaceManager;
   gitManager?: GitManager;
   taskRegistry?: TaskRegistry;
@@ -165,13 +166,20 @@ export class Controller extends EventEmitter {
     this.workspacePath = options.workspacePath;
     this.stateFilePath = options.stateFilePath;
     this.model = options.model ?? "gpt-5.2-codex";
-    this.sandboxPolicy = options.sandboxPolicy ?? "workspace-write";
+    this.sandboxPolicy = options.sandboxPolicy ?? "workspaceWrite";
     this.approvalPolicy = options.approvalPolicy ?? "never";
     // In production, device auth is typically done out-of-band via `codex login --device-auth`.
     // The app-server may not emit `account/login/completed` for that path, so waiting minutes
     // per request is undesirable. Keep this short and proceed if we don't hear back quickly.
     this.loginTimeoutMs = options.loginTimeoutMs ?? 10_000;
-    this.workspaceManager = options.workspaceManager ?? new WorkspaceManager();
+    const envWorkspacesRoot =
+      options.workspacesRoot?.trim() ||
+      process.env.WORKSPACES_ROOT?.trim() ||
+      process.env.GPC_WORKSPACES_ROOT?.trim() ||
+      undefined;
+    this.workspaceManager = options.workspaceManager ?? new WorkspaceManager(
+      envWorkspacesRoot ? { workspacesRoot: envWorkspacesRoot } : {},
+    );
     this.gitManager = options.gitManager ?? new GitManager(this.workspaceManager);
     this.taskRegistry = options.taskRegistry ?? new TaskRegistry(`${dirname(this.stateFilePath)}/tasks.json`);
     this.streamToStdout = options.streamToStdout ?? true;
@@ -721,11 +729,15 @@ export class Controller extends EventEmitter {
       modelProvider: null,
       cwd,
       approvalPolicy: this.approvalPolicy,
-      sandbox: this.sandboxPolicy,
+      sandbox: this.normalizeThreadSandboxPolicy(),
       config: null,
       baseInstructions: null,
       developerInstructions: null,
     });
+  }
+
+  private normalizeThreadSandboxPolicy(): "workspaceWrite" | "readOnly" | "dangerFullAccess" {
+    return this.sandboxPolicy === "workspace-write" ? "workspaceWrite" : "workspaceWrite";
   }
 
   private async executeTurn(args: {

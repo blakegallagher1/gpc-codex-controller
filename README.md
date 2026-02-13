@@ -25,6 +25,20 @@ npm start -- serve
 
 The server listens on `127.0.0.1:8787` by default. You can override the bind address and port with `MCP_BIND` and `MCP_PORT` environment variables.
 
+For local testing on machines without `/workspaces`, you can override workspace location with either:
+
+```bash
+# Env override
+WORKSPACES_ROOT=/tmp/gpc-workspaces npm start -- serve
+```
+
+or:
+
+```bash
+# CLI override
+npm start -- serve --workspacesRoot /tmp/gpc-workspaces
+```
+
 ## Connecting Your ChatGPT Account to the Server
 
 ### Step 1 — Authenticate the Codex CLI with ChatGPT
@@ -121,6 +135,8 @@ The high-level flow is:
 | `MCP_BASE_URL` | *(none)* | Public base URL for the MCP endpoint (e.g. `https://mcp.example.com`). Use when running behind a reverse proxy or tunnel. |
 | `MCP_BEARER_TOKEN` | *(none)* | Optional bearer token for authenticating inbound requests |
 | `CODEX_HOME` | `~/.codex` | Directory where Codex persists auth state |
+| `WORKSPACES_ROOT` | `/workspaces` | Root directory for per-task workspaces (cloned `gpc-cres` repos) |
+| `GPC_WORKSPACES_ROOT` | *(none)* | Alternate env var for workspace root (same behavior as `WORKSPACES_ROOT`) |
 | `GITHUB_TOKEN` | *(none)* | GitHub token used for PR automation |
 
 ## CLI Commands

@@ -9,6 +9,7 @@ interface CliOptions {
   stateFile?: string;
   serverCommand: string;
   serverArgs: string;
+  workspacesRoot?: string;
   requestTimeoutMs?: string;
   loginTimeoutMs?: string;
   prompt?: string;
@@ -45,6 +46,9 @@ async function main(): Promise<void> {
       serverCommand: {
         type: "string",
         default: "codex",
+      },
+      workspacesRoot: {
+        type: "string",
       },
       serverArgs: {
         type: "string",
@@ -115,6 +119,9 @@ async function main(): Promise<void> {
     workspacePath,
     stateFilePath,
   };
+  if (cli.workspacesRoot?.trim()) {
+    controllerOptions.workspacesRoot = cli.workspacesRoot.trim();
+  }
   if (loginTimeoutMs !== undefined) {
     controllerOptions.loginTimeoutMs = loginTimeoutMs;
   }

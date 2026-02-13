@@ -72,7 +72,7 @@ export interface LoginCompletedParams {
 }
 
 // Must match codex app-server enum variants.
-export type SandboxPolicy = "workspace-write";
+export type SandboxPolicy = "workspaceWrite" | "readOnly" | "dangerFullAccess" | "workspace-write";
 export type ApprovalPolicy = "never";
 
 export interface ThreadStartParams {
