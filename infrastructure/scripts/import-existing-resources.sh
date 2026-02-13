@@ -8,7 +8,7 @@ log() {
 
 log_request() {
   local endpoint="$1"
-  log "requesting ${endpoint}"
+  log "requesting ${endpoint}" >&2
 }
 
 require_env_var() {
