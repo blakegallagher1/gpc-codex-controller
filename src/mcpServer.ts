@@ -89,9 +89,16 @@ export function createMcpHandler(
 
   mcp.tool(
     "start_task",
-    "Start a new Codex coding task. Returns a jobId — poll with get_job.",
+    "Start a new Codex coding task that modifies code. Runs pnpm verify after changes. Returns a jobId — poll with get_job.",
     { prompt: z.string().describe("Natural-language task description") },
     async ({ prompt }) => textResult(enqueue("task/start", () => controller.startTask(prompt))),
+  );
+
+  mcp.tool(
+    "start_analysis",
+    "Start a READ-ONLY analysis task. Reads code and writes reports to _artifacts/ without modifying source files or running builds/tests. Use this for audits, reviews, gap analyses, and recommendations. Returns a jobId — poll with get_job.",
+    { prompt: z.string().describe("Analysis task description") },
+    async ({ prompt }) => textResult(enqueue("analysis/start", () => controller.startAnalysis(prompt))),
   );
 
   mcp.tool(

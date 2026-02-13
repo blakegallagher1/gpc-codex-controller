@@ -382,6 +382,39 @@ export class Controller extends EventEmitter {
     });
   }
 
+  /**
+   * Start a read-only analysis task. Uses the raw prompt without mutation
+   * wrapper (no "implement feature" instructions, no pnpm verify).
+   * Ideal for code review, audits, and report generation.
+   */
+  public async startAnalysis(prompt: string): Promise<StartOrContinueTaskResult> {
+    await this.ensureSessionReady();
+    this.handleTurnEvents();
+    this.handleItemEvents();
+    this.handleApprovalEvents();
+
+    const threadId = await this.createAndPersistNewThread(this.workspacePath);
+    const analysisPrompt = [
+      "Task: analyze the gpc-cres monorepo and produce a written report. This is a READ-ONLY analysis — do not modify source code, do not run pnpm verify, do not commit changes.",
+      "",
+      "Instructions:",
+      "1. Read the requested files carefully and thoroughly.",
+      "2. Write your analysis to the specified _artifacts/ file.",
+      "3. Do NOT run pnpm install, pnpm verify, pnpm build, or any build/test commands.",
+      "4. Do NOT modify any source files or create commits.",
+      "5. Focus entirely on analysis, findings, and recommendations.",
+      "",
+      "Analysis request:",
+      prompt.trim(),
+    ].join("\n");
+
+    return this.executeTurn({
+      threadId,
+      prompt: analysisPrompt,
+      cwd: this.workspacePath,
+    });
+  }
+
   public async startTask(prompt: string): Promise<StartOrContinueTaskResult> {
     await this.ensureSessionReady();
     this.handleTurnEvents();
