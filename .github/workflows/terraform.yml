@@ -1,14 +1,15 @@
 # Terraform CI workflow for gpc-codex-controller infrastructure.
 #
 # On pull requests: runs terraform init, fmt -check, validate.
-# On push to main: additionally runs terraform plan and terraform apply.
+# On push to main: additionally runs terraform fmt/validate/plan.
+# On manual workflow_dispatch with input apply=true: runs terraform apply.
 #
 # Required GitHub repository secrets:
 #   HCLOUD_TOKEN          – Hetzner Cloud API token
 #   CLOUDFLARE_API_TOKEN  – Cloudflare API token
 #   CLOUDFLARE_ACCOUNT_ID – Cloudflare account ID
 #   CLOUDFLARE_ZONE_ID    – Cloudflare DNS zone ID
-#   TF_VAR_domain         – Base domain (e.g. example.com)
+#   TF_VAR_DOMAIN         – Base domain (e.g. example.com)
 #
 # Optional secrets (used when deploying):
 #   TF_VAR_github_token      – GitHub token for PR automation
@@ -18,6 +19,13 @@
 name: 'Terraform'
 
 on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Run terraform apply (must be used with persistent/known state)."
+        required: false
+        default: false
+        type: boolean
   push:
     branches: ["main"]
     paths:
@@ -68,9 +76,14 @@ jobs:
       run: terraform validate
 
     - name: Terraform Plan
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: |
+        (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
       run: terraform plan -input=false
 
     - name: Terraform Apply
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      if: |
+        github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.apply == 'true' &&
+        github.ref == 'refs/heads/main'
       run: terraform apply -auto-approve -input=false
