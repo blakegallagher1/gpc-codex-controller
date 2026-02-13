@@ -101,8 +101,8 @@ resource "cloudflare_zero_trust_access_application" "this" {
   policies = concat(
     [{ id = cloudflare_zero_trust_access_policy.service_token[0].id }],
     length(cloudflare_zero_trust_access_policy.email_allow) > 0
-      ? [{ id = cloudflare_zero_trust_access_policy.email_allow[0].id }]
-      : []
+    ? [{ id = cloudflare_zero_trust_access_policy.email_allow[0].id }]
+    : []
   )
 }
 
