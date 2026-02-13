@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+log() {
+  echo "[import-existing] $*"
+}
+
+require_env_var() {
+  local name="$1"
+  local value="${!name-}"
+  if [[ -z "${value}" ]]; then
+    echo "::error::Required environment variable ${name} is not set."
+    exit 1
+  fi
+}
+
+request_json() {
+  local url="$1"
+  local token="$2"
+
+  curl -fsS \
+    -H "Authorization: Bearer ${token}" \
+    "${url}"
+}
+
+state_has() {
+  terraform state list "$1" >/dev/null 2>&1
+}
+
+import_if_needed() {
+  local address="$1"
+  local id="$2"
+
+  if state_has "$address"; then
+    log "state already tracks ${address}"
+    return 0
+  fi
+
+  if [[ -z "${id}" ]]; then
+    log "no import id available for ${address}; skipping"
+    return 0
+  fi
+
+  log "importing ${address} as ${id}"
+  terraform import "${address}" "${id}"
+}
+
+if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" || "${TERRAFORM_APPLY}" != "true" ]]; then
+  log "Skipping resource import for non-manual apply workflow."
+  exit 0
+fi
+
+require_env_var CLOUDFLARE_ACCOUNT_ID
+require_env_var CLOUDFLARE_ZONE_ID
+require_env_var CLOUDFLARE_API_TOKEN
+require_env_var HCLOUD_TOKEN
+
+WORKSPACE_SETTINGS_JSON_RAW="$(terraform console <<< 'jsonencode({ project_name = var.project_name, environment = var.environment, subdomain = var.subdomain, domain = var.domain, access_allowed_emails = var.access_allowed_emails, access_service_token_name = var.access_service_token_name, enable_access = var.enable_access, ssh_public_key = var.ssh_public_key, volume_size_gb = var.volume_size_gb, location = var.location, server_type = var.server_type, image = var.image })')"
+WORKSPACE_SETTINGS_JSON="$(jq -r '.' <<<"${WORKSPACE_SETTINGS_JSON_RAW}")"
+
+if [[ -z "${WORKSPACE_SETTINGS_JSON}" || "${WORKSPACE_SETTINGS_JSON}" == "null" ]]; then
+  echo "::error::Failed to resolve Terraform variables for import lookup."
+  exit 1
+fi
+
+PROJECT_NAME="$(jq -r '.project_name' <<<"${WORKSPACE_SETTINGS_JSON}")"
+ENVIRONMENT="$(jq -r '.environment' <<<"${WORKSPACE_SETTINGS_JSON}")"
+SUBDOMAIN="$(jq -r '.subdomain' <<<"${WORKSPACE_SETTINGS_JSON}")"
+DOMAIN="$(jq -r '.domain' <<<"${WORKSPACE_SETTINGS_JSON}")"
+SSH_PUBLIC_KEY="$(jq -r '.ssh_public_key // ""' <<<"${WORKSPACE_SETTINGS_JSON}")"
+ACCESS_SERVICE_TOKEN_NAME="$(jq -r '.access_service_token_name' <<<"${WORKSPACE_SETTINGS_JSON}")"
+ENABLE_ACCESS="$(jq -r '.enable_access' <<<"${WORKSPACE_SETTINGS_JSON}")"
+ACCESS_ALLOWED_EMAILS="$(jq -r '.access_allowed_emails | length' <<<"${WORKSPACE_SETTINGS_JSON}")"
+
+TUNNEL_NAME="${PROJECT_NAME}-${ENVIRONMENT}-tunnel"
+SERVER_NAME="${PROJECT_NAME}-${ENVIRONMENT}-vm"
+FIREWALL_NAME="${SERVER_NAME}-fw"
+VOLUME_NAME="${PROJECT_NAME}-${ENVIRONMENT}-workspaces"
+SSH_KEY_NAME="${SERVER_NAME}-ssh"
+DNS_RECORD_NAME="${SUBDOMAIN}"
+DNS_RECORD_FQDN="${SUBDOMAIN}.${DOMAIN}"
+ACCESS_APP_NAME="${TUNNEL_NAME}-access-app"
+MCP_APP_NAME="${TUNNEL_NAME}-mcp-access"
+MCP_BYPASS_POLICY_NAME="${TUNNEL_NAME}-mcp-bypass"
+SERVICE_TOKEN_POLICY_NAME="${TUNNEL_NAME}-service-token-policy"
+EMAIL_POLICY_NAME="${TUNNEL_NAME}-email-allow-policy"
+
+CF_ACCOUNT_PATH="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+CF_TUNNEL_LIST=$(request_json "${CF_ACCOUNT_PATH}/cfd_tunnel" "${CLOUDFLARE_API_TOKEN}")
+CF_TUNNEL_ID=$(jq -r --arg NAME "${TUNNEL_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${CF_TUNNEL_LIST}")
+CF_TUNNEL_CONFIG_ID="${CF_TUNNEL_ID}"
+
+CF_APPS_LIST=$(request_json "${CF_ACCOUNT_PATH}/access/apps" "${CLOUDFLARE_API_TOKEN}")
+CF_ACCESS_APP_ID=$(jq -r --arg NAME "${ACCESS_APP_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${CF_APPS_LIST}")
+CF_MCP_APP_ID=$(jq -r --arg NAME "${MCP_APP_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${CF_APPS_LIST}")
+
+CF_SERVICE_TOKEN_LIST=$(request_json "${CF_ACCOUNT_PATH}/access/service_tokens" "${CLOUDFLARE_API_TOKEN}")
+CF_SERVICE_TOKEN_ID=$(jq -r --arg NAME "${ACCESS_SERVICE_TOKEN_NAME}" '(.result // []) | map(select(.name == $NAME)) | sort_by(.created_at) | reverse | first | .id // empty' <<<"${CF_SERVICE_TOKEN_LIST}")
+
+CF_EMAIL_POLICY_ID=""
+CF_SERVICE_TOKEN_POLICY_ID=""
+if [[ "${ENABLE_ACCESS}" == "true" && -n "${CF_ACCESS_APP_ID}" ]]; then
+  APP_POLICIES_LIST=$(request_json "${CF_ACCOUNT_PATH}/access/apps/${CF_ACCESS_APP_ID}/policies" "${CLOUDFLARE_API_TOKEN}")
+  CF_SERVICE_TOKEN_POLICY_ID=$(jq -r --arg NAME "${SERVICE_TOKEN_POLICY_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${APP_POLICIES_LIST}")
+  if [[ "${ACCESS_ALLOWED_EMAILS}" -gt 0 ]]; then
+    CF_EMAIL_POLICY_ID=$(jq -r --arg NAME "${EMAIL_POLICY_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${APP_POLICIES_LIST}")
+  fi
+fi
+
+if [[ "${ENABLE_ACCESS}" == "true" && -n "${CF_MCP_APP_ID}" ]]; then
+  MCP_POLICIES_LIST=$(request_json "${CF_ACCOUNT_PATH}/access/apps/${CF_MCP_APP_ID}/policies" "${CLOUDFLARE_API_TOKEN}")
+  CF_MCP_BYPASS_POLICY_ID=$(jq -r --arg NAME "${MCP_BYPASS_POLICY_NAME}" '(.result // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${MCP_POLICIES_LIST}")
+else
+  CF_MCP_BYPASS_POLICY_ID=""
+fi
+
+CF_DNS_RECORD_LIST=$(request_json "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/dns_records?name=${DNS_RECORD_FQDN}" "${CLOUDFLARE_API_TOKEN}")
+CF_DNS_RECORD_ID=$(jq -r --arg NAME "${DNS_RECORD_NAME}" '(.result // []) | map(select(.name == $NAME or .name == ($NAME + "."))) | first | .id // empty' <<<"${CF_DNS_RECORD_LIST}")
+
+H_TOKEN="${HCLOUD_TOKEN}"
+HCLOUD_API_HEADERS="Authorization: Bearer ${H_TOKEN}"
+HCLOUD_API_BASE="https://api.hetzner.cloud/v1"
+
+HCLOUD_SERVERS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/servers")
+HCLOUD_SERVER_ID=$(jq -r --arg NAME "${SERVER_NAME}" '(.servers // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_SERVERS}")
+
+HCLOUD_FIREWALLS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/firewalls")
+HCLOUD_FIREWALL_ID=$(jq -r --arg NAME "${FIREWALL_NAME}" '(.firewalls // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_FIREWALLS}")
+
+HCLOUD_VOLUMES=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/volumes")
+HCLOUD_VOLUME_ID=$(jq -r --arg NAME "${VOLUME_NAME}" '(.volumes // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_VOLUMES}")
+
+if [[ -n "${SSH_PUBLIC_KEY}" ]]; then
+  HCLOUD_KEYS=$(curl -fsS -H "${HCLOUD_API_HEADERS}" "${HCLOUD_API_BASE}/ssh_keys")
+  HCLOUD_SSH_KEY_ID=$(jq -r --arg NAME "${SSH_KEY_NAME}" '(.ssh_keys // []) | map(select(.name == $NAME)) | first | .id // empty' <<<"${HCLOUD_KEYS}")
+else
+  HCLOUD_SSH_KEY_ID=""
+fi
+
+import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_tunnel_cloudflared.this" "${CLOUDFLARE_ACCOUNT_ID}/${CF_TUNNEL_ID}"
+import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_tunnel_cloudflared_config.this" "${CLOUDFLARE_ACCOUNT_ID}/${CF_TUNNEL_CONFIG_ID}"
+import_if_needed "module.hetzner_vm.hcloud_server.this" "${HCLOUD_SERVER_ID}"
+import_if_needed "module.hetzner_vm.hcloud_firewall.this" "${HCLOUD_FIREWALL_ID}"
+import_if_needed "module.hetzner_vm.hcloud_volume.workspaces" "${HCLOUD_VOLUME_ID}"
+import_if_needed "module.cloudflare_tunnel.cloudflare_dns_record.this" "${CLOUDFLARE_ZONE_ID}/${CF_DNS_RECORD_ID}"
+
+if [[ "${ENABLE_ACCESS}" == "true" ]]; then
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_service_token.this[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_ID}"
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_policy.service_token[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_SERVICE_TOKEN_POLICY_ID}"
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_application.this[0]" "accounts/${CLOUDFLARE_ACCOUNT_ID}/${CF_ACCESS_APP_ID}"
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_policy.mcp_bypass[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_MCP_BYPASS_POLICY_ID}"
+  import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_application.mcp[0]" "accounts/${CLOUDFLARE_ACCOUNT_ID}/${CF_MCP_APP_ID}"
+  if [[ "${ACCESS_ALLOWED_EMAILS}" -gt 0 ]]; then
+    import_if_needed "module.cloudflare_tunnel.cloudflare_zero_trust_access_policy.email_allow[0]" "${CLOUDFLARE_ACCOUNT_ID}/${CF_EMAIL_POLICY_ID}"
+  fi
+fi
+
+if [[ -n "${SSH_PUBLIC_KEY}" ]]; then
+  import_if_needed "module.hetzner_vm.hcloud_ssh_key.this[0]" "${HCLOUD_SSH_KEY_ID}"
+fi
+
+log "Resource import preflight completed."

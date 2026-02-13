@@ -75,6 +75,18 @@ jobs:
     - name: Terraform Validate
       run: terraform validate
 
+    - name: Import existing infra resources for idempotent apply
+      if: |
+        github.event_name == 'workflow_dispatch' &&
+        github.event.inputs.apply == 'true' &&
+        github.ref == 'refs/heads/main'
+      env:
+        TERRAFORM_APPLY: ${{ github.event.inputs.apply }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+      run: |
+        chmod +x ./scripts/import-existing-resources.sh
+        ./scripts/import-existing-resources.sh
+
     - name: Terraform Plan
       if: |
         (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
