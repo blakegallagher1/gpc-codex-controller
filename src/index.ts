@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     options: {
       workspace: {
         type: "string",
-        default: process.cwd(),
+        default: process.env.CONTROLLER_WORKSPACE ?? process.cwd(),
       },
       stateFile: {
         type: "string",
