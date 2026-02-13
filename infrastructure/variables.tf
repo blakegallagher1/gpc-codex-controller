@@ -34,6 +34,12 @@ variable "cloudflare_zone_id" {
   type        = string
 }
 
+variable "cloudflare_manage_dns_record" {
+  description = "Whether Terraform should manage the Cloudflare DNS CNAME record."
+  type        = bool
+  default     = true
+}
+
 variable "domain" {
   description = "Base domain managed in Cloudflare (example.com)."
   type        = string

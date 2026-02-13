@@ -58,3 +58,9 @@ variable "access_service_token_name" {
   description = "Name for the Access service token used by automated API clients."
   default     = "controller-api"
 }
+
+variable "manage_dns_record" {
+  type        = bool
+  description = "Whether Terraform should create/manage the CNAME DNS record."
+  default     = true
+}

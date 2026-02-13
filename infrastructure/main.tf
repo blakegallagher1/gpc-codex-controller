@@ -46,6 +46,7 @@ module "cloudflare_tunnel" {
   enable_access             = var.enable_access
   access_allowed_emails     = var.access_allowed_emails
   access_service_token_name = var.access_service_token_name
+  manage_dns_record         = var.cloudflare_manage_dns_record
 }
 
 module "hetzner_vm" {

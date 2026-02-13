@@ -190,12 +190,22 @@ fi
 if ! CF_DNS_RECORD_LIST="$(request_json "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/dns_records?name=${DNS_RECORD_FQDN}" "${CLOUDFLARE_API_TOKEN}")"; then
   log "warning: failed to query DNS records; skipping DNS import"
   CF_DNS_RECORD_LIST='{"result":[]}'
+  CLOUDFLARE_DNS_MANAGED="false"
+else
+  CLOUDFLARE_DNS_MANAGED="true"
 fi
 CF_DNS_RECORD_ID=$(jq -r --arg NAME "${DNS_RECORD_NAME}" '(.result // []) | map(select(.name == $NAME or .name == ($NAME + "."))) | first | .id // empty' <<<"${CF_DNS_RECORD_LIST}")
 if [[ -n "${CF_DNS_RECORD_ID}" ]]; then
   CF_DNS_IMPORT_ID="${CLOUDFLARE_ZONE_ID}/${CF_DNS_RECORD_ID}"
 else
   CF_DNS_IMPORT_ID=""
+fi
+if [[ "${CLOUDFLARE_DNS_MANAGED}" == "true" ]]; then
+  rm -f ./.terraform.auto.tfvars
+else
+  cat <<'EOF' > ./.terraform.auto.tfvars
+cloudflare_manage_dns_record = false
+EOF
 fi
 
 H_TOKEN="${HCLOUD_TOKEN}"

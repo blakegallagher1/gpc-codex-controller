@@ -143,6 +143,7 @@ resource "cloudflare_zero_trust_access_application" "mcp" {
 # ---------------------------------------------------------------------------
 
 resource "cloudflare_dns_record" "this" {
+  count   = var.manage_dns_record ? 1 : 0
   zone_id = var.zone_id
   name    = var.dns_record_name
   type    = "CNAME"
