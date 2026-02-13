@@ -416,6 +416,12 @@ export class Controller extends EventEmitter {
   }
 
   public async startTask(prompt: string): Promise<StartOrContinueTaskResult> {
+    // Auto-detect analysis-type prompts and route to startAnalysis()
+    // so ChatGPT doesn't need to pick the right tool.
+    if (this.isAnalysisPrompt(prompt)) {
+      return this.startAnalysis(prompt);
+    }
+
     await this.ensureSessionReady();
     this.handleTurnEvents();
     this.handleItemEvents();
@@ -428,6 +434,34 @@ export class Controller extends EventEmitter {
       prompt: enrichedPrompt,
       cwd: this.workspacePath,
     });
+  }
+
+  /**
+   * Detect whether a prompt is asking for analysis/review/audit (read-only)
+   * vs. a code modification task (mutation).
+   */
+  private isAnalysisPrompt(prompt: string): boolean {
+    const lower = prompt.toLowerCase();
+    const analysisKeywords = [
+      "analyze", "analysis", "audit", "review", "assess", "evaluate",
+      "identify", "recommend", "gap analysis", "report", "survey",
+      "inspect", "catalogue", "catalog", "inventory", "summarize",
+      "summary", "document", "list all", "find all", "scan for",
+      "what are", "how does", "explain", "describe", "map out",
+      "architecture review", "code review", "security audit",
+      "dependency audit", "data source", "weak area", "improvement",
+    ];
+    const mutationKeywords = [
+      "implement", "add feature", "create new", "build a", "fix bug",
+      "refactor", "migrate", "upgrade", "install", "set up",
+      "write code", "add endpoint", "add component", "add test",
+    ];
+
+    const analysisScore = analysisKeywords.filter((kw) => lower.includes(kw)).length;
+    const mutationScore = mutationKeywords.filter((kw) => lower.includes(kw)).length;
+
+    // If analysis signals outweigh mutation signals, route to analysis
+    return analysisScore > mutationScore;
   }
 
   public async continueTask(threadId: string, prompt: string): Promise<StartOrContinueTaskResult> {
@@ -1479,6 +1513,53 @@ export class Controller extends EventEmitter {
     } catch {
       return { turnId, output: "(No output captured for this turn. The turn may not have produced agent messages, or the server restarted since completion.)" };
     }
+  }
+
+  /**
+   * Read all recent artifact files from the workspace's _artifacts/ directory.
+   * Returns an array of { name, content } for files created in the last hour.
+   * Used to enrich get_job responses so ChatGPT sees artifact content inline.
+   */
+  public async readRecentArtifacts(): Promise<Array<{ name: string; content: string }>> {
+    const artifactsDir = resolve(this.workspacePath, "_artifacts");
+    const results: Array<{ name: string; content: string }> = [];
+    const ONE_HOUR_MS = 60 * 60 * 1000;
+    const cutoff = Date.now() - ONE_HOUR_MS;
+
+    try {
+      const { readdir, stat: fstat, readFile: fRead } = await import("node:fs/promises");
+      const entries = await readdir(artifactsDir);
+
+      for (const entry of entries) {
+        // Skip turn-output files (already included as agentOutput)
+        if (entry.startsWith("turn-output-")) {
+          continue;
+        }
+
+        const fullPath = resolve(artifactsDir, entry);
+        try {
+          const info = await fstat(fullPath);
+          if (!info.isFile() || info.mtimeMs < cutoff) {
+            continue;
+          }
+
+          // Only include text files under 100KB
+          if (info.size > 100 * 1024) {
+            results.push({ name: entry, content: `(File too large: ${Math.round(info.size / 1024)}KB — use read_artifact to retrieve)` });
+            continue;
+          }
+
+          const content = await fRead(fullPath, "utf8");
+          results.push({ name: entry, content });
+        } catch {
+          // Skip unreadable files
+        }
+      }
+    } catch {
+      // _artifacts/ may not exist
+    }
+
+    return results;
   }
 
   /**

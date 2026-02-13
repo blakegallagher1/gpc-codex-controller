@@ -89,8 +89,8 @@ export function createMcpHandler(
 
   mcp.tool(
     "start_task",
-    "Start a new Codex coding task that modifies code. Runs pnpm verify after changes. Returns a jobId — poll with get_job.",
-    { prompt: z.string().describe("Natural-language task description") },
+    "Start a new Codex task. Automatically detects whether the prompt is an analysis/review (read-only) or a code modification, and routes accordingly. For analysis tasks, produces reports in _artifacts/. For mutation tasks, modifies code and runs verification. Returns a jobId — poll with get_job to get full results including agent output and artifact content.",
+    { prompt: z.string().describe("Natural-language task description — can be analysis, review, audit, or code modification") },
     async ({ prompt }) => textResult(enqueue("task/start", () => controller.startTask(prompt))),
   );
 
@@ -219,13 +219,42 @@ export function createMcpHandler(
 
   mcp.tool(
     "get_job",
-    "Poll the status of an async job by its jobId. Returns status, result, or error.",
+    "Poll the status of an async job by its jobId. When the job succeeds, the response includes the full agent output text and any artifact files that were created — no need to call separate tools to read results.",
     { jobId: z.string().describe("Job ID returned by an async tool") },
     async ({ jobId }) => {
       const job = jobs.get(jobId.trim());
       if (!job) {
         return { content: [{ type: "text", text: JSON.stringify({ error: `Unknown jobId: ${jobId}` }) }], isError: true };
       }
+
+      // When job succeeds, enrich the response with artifact content
+      if (job.status === "succeeded" && job.result && typeof job.result === "object") {
+        const result = job.result as Record<string, unknown>;
+        const enriched: Record<string, unknown> = { ...job };
+
+        // If the result has a turnId, fetch the turn output
+        if (typeof result.turnId === "string") {
+          try {
+            const turnData = await controller.getTurnOutput(result.turnId);
+            enriched.agentOutput = turnData.output;
+          } catch {
+            // Non-critical
+          }
+        }
+
+        // Scan for artifact files and include their content
+        try {
+          const artifactContent = await controller.readRecentArtifacts();
+          if (artifactContent.length > 0) {
+            enriched.artifacts = artifactContent;
+          }
+        } catch {
+          // Non-critical
+        }
+
+        return textResult(enriched);
+      }
+
       return textResult(job);
     },
   );
