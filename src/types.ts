@@ -380,6 +380,8 @@ export interface ReviewFinding {
   severity: ReviewSeverity;
   message: string;
   rule: string;
+  /** Agent-targeted remediation: tells the agent exactly how to fix this violation. */
+  remediation: string | null;
 }
 
 export interface ReviewResult {
@@ -422,6 +424,8 @@ export interface LintFinding {
   severity: "error" | "warning";
   message: string;
   rule: string;
+  /** Agent-targeted remediation: tells the agent exactly how to fix this violation. */
+  remediation: string | null;
 }
 
 export interface LintResult {
@@ -439,6 +443,8 @@ export interface ArchViolation {
   source: string;
   target: string;
   message: string;
+  /** Agent-targeted remediation: tells the agent exactly how to fix this violation. */
+  remediation: string | null;
 }
 
 export interface ArchValidationResult {

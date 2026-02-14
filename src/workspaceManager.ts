@@ -1,14 +1,17 @@
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 
 const DEFAULT_REPO_URL = "https://github.com/blakegallagher1/gpc-cres";
 const DEFAULT_WORKSPACES_ROOT = "/workspaces";
 const OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
+const BARE_REPO_DIR = ".bare-repo";
 
 export interface WorkspaceManagerOptions {
   repoUrl?: string;
   workspacesRoot?: string;
+  /** Set to true to use git worktrees instead of full clones (default: true). */
+  useWorktrees?: boolean;
 }
 
 export interface CommandResult {
@@ -22,10 +25,18 @@ export interface CommandResult {
 export class WorkspaceManager {
   private readonly repoUrl: string;
   private readonly workspacesRoot: string;
+  private readonly useWorktrees: boolean;
+  private bareRepoReady = false;
 
   public constructor(options: WorkspaceManagerOptions = {}) {
     this.repoUrl = options.repoUrl ?? DEFAULT_REPO_URL;
     this.workspacesRoot = resolve(options.workspacesRoot ?? DEFAULT_WORKSPACES_ROOT);
+    this.useWorktrees = options.useWorktrees ?? true;
+  }
+
+  /** Path to the shared bare repo used for worktree-based isolation. */
+  public get bareRepoPath(): string {
+    return resolve(this.workspacesRoot, BARE_REPO_DIR);
   }
 
   public async createWorkspace(taskId: string): Promise<string> {
@@ -38,7 +49,11 @@ export class WorkspaceManager {
       const entries = await readdir(workspacePath);
 
       if (entries.length === 0) {
-        await this.cloneInto(workspacePath);
+        if (this.useWorktrees) {
+          await this.addWorktree(taskId, workspacePath);
+        } else {
+          await this.cloneInto(workspacePath);
+        }
         return workspacePath;
       }
 
@@ -51,8 +66,39 @@ export class WorkspaceManager {
       return workspacePath;
     }
 
-    await this.cloneInto(workspacePath);
+    if (this.useWorktrees) {
+      await this.addWorktree(taskId, workspacePath);
+    } else {
+      await this.cloneInto(workspacePath);
+    }
     return workspacePath;
+  }
+
+  /**
+   * Remove a workspace. For worktree-based workspaces this also removes the
+   * worktree from the bare repo. For clone-based workspaces this deletes the
+   * directory.
+   */
+  public async destroyWorkspace(taskId: string): Promise<void> {
+    const workspacePath = this.resolveWorkspacePath(taskId);
+    if (!(await this.pathExists(workspacePath))) {
+      return;
+    }
+
+    if (this.useWorktrees) {
+      try {
+        await this.runCommand({
+          command: ["git", "worktree", "remove", "--force", workspacePath],
+          cwd: this.bareRepoPath,
+          allowNonZeroExit: true,
+        });
+      } catch {
+        // Fall back to rm if worktree remove fails (e.g. bare repo gone)
+        await rm(workspacePath, { recursive: true, force: true });
+      }
+    } else {
+      await rm(workspacePath, { recursive: true, force: true });
+    }
   }
 
   public async runInWorkspace(taskId: string, cmd: readonly string[] | string): Promise<CommandResult> {
@@ -136,6 +182,82 @@ export class WorkspaceManager {
     });
   }
 
+  /**
+   * Ensure the shared bare repository exists. This is a one-time operation
+   * that creates a bare clone used as the source for all worktrees.
+   * Subsequent calls are no-ops.
+   */
+  private async ensureBareRepo(): Promise<void> {
+    if (this.bareRepoReady) {
+      return;
+    }
+
+    const barePath = this.bareRepoPath;
+
+    if (await this.pathExists(barePath)) {
+      // Validate it's a git repo
+      const headPath = resolve(barePath, "HEAD");
+      if (await this.pathExists(headPath)) {
+        // Fetch latest from origin so worktrees are up to date
+        try {
+          await this.runCommand({
+            command: ["git", "fetch", "origin", "--depth", "1"],
+            cwd: barePath,
+            allowNonZeroExit: true,
+          });
+        } catch {
+          // Non-critical: offline is fine if we already have data
+        }
+        this.bareRepoReady = true;
+        return;
+      }
+    }
+
+    await mkdir(this.workspacesRoot, { recursive: true });
+    await this.runCommand({
+      command: [
+        "git",
+        "clone",
+        "--bare",
+        "--origin",
+        "origin",
+        "--depth",
+        "1",
+        "--no-tags",
+        this.repoUrl,
+        barePath,
+      ],
+      cwd: this.workspacesRoot,
+      allowNonZeroExit: false,
+    });
+
+    this.bareRepoReady = true;
+  }
+
+  /**
+   * Create a workspace using `git worktree add` from the shared bare repo.
+   * Nearly instant compared to a full clone, and shares the object store.
+   */
+  private async addWorktree(taskId: string, workspacePath: string): Promise<void> {
+    await this.ensureBareRepo();
+
+    const parentDir = resolve(workspacePath, "..");
+    await mkdir(parentDir, { recursive: true });
+
+    // Create a detached worktree from the default branch
+    await this.runCommand({
+      command: [
+        "git",
+        "worktree",
+        "add",
+        "--detach",
+        workspacePath,
+      ],
+      cwd: this.bareRepoPath,
+      allowNonZeroExit: false,
+    });
+  }
+
   private assertAllowedCommand(command: readonly string[], workspacePath: string): void {
     const [binary, ...args] = command;
 
@@ -185,7 +307,7 @@ export class WorkspaceManager {
     }
   }
 
-  private resolveWorkspacePath(taskId: string): string {
+  public resolveWorkspacePath(taskId: string): string {
     const validatedTaskId = this.validateTaskId(taskId);
     const workspacePath = resolve(this.workspacesRoot, validatedTaskId);
     const rootPrefix = this.workspacesRoot.endsWith(sep) ? this.workspacesRoot : `${this.workspacesRoot}${sep}`;

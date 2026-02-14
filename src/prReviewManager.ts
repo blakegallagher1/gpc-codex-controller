@@ -139,41 +139,47 @@ export class PRReviewManager {
 
       // Check for `any` type usage
       if (/:\s*any\b/.test(content) && !content.includes("// allow-any")) {
-        findings.push(this.finding(currentFile, "error", "Avoid using `any` type — use a specific type or `unknown`.", "type-safety"));
+        findings.push(this.finding(currentFile, "error", "Avoid using `any` type — use a specific type or `unknown`.", "type-safety",
+          "Replace ': any' with the correct specific type. Use 'unknown' if truly unknown, then narrow with type guards. For JSON parsing use 'unknown' then validate with a zod schema."));
       }
 
       // Check for @ts-ignore
       if (/@ts-ignore/.test(content)) {
-        findings.push(this.finding(currentFile, "error", "Do not use @ts-ignore — use @ts-expect-error with explanation if necessary.", "type-safety"));
+        findings.push(this.finding(currentFile, "error", "Do not use @ts-ignore — use @ts-expect-error with explanation if necessary.", "type-safety",
+          "Replace @ts-ignore with @ts-expect-error and add a comment explaining the suppression. Better yet, fix the underlying type error."));
       }
 
       // Check for console.log in non-test files
       if (/console\.log\(/.test(content) && !currentFile.includes(".test.") && !currentFile.includes(".spec.")) {
-        findings.push(this.finding(currentFile, "warning", "Remove console.log — use structured logging instead.", "no-console"));
+        findings.push(this.finding(currentFile, "warning", "Remove console.log — use structured logging instead.", "no-console",
+          "Delete this console.log statement. If logging is needed, import the logger from '@gpc-cres/shared/logger' and use logger.info/debug/error instead."));
       }
 
       // Check for Prisma queries missing orgId
       if (/\.(findMany|findFirst|findUnique|update|delete|count|aggregate)\s*\(/.test(content)) {
         if (!content.includes("orgId")) {
-          findings.push(this.finding(currentFile, "error", "Prisma query missing orgId filter — all tenant-sensitive queries must include orgId.", "orgid-compliance"));
+          findings.push(this.finding(currentFile, "error", "Prisma query missing orgId filter — all tenant-sensitive queries must include orgId.", "orgid-compliance",
+            "Add 'orgId' to the 'where' clause of this Prisma query. Example: .findMany({ where: { orgId, ...otherFilters } }). The orgId should come from the request context (req.orgId or ctx.orgId)."));
         }
       }
 
       // Check for TODO/FIXME left in code
       if (/\bTODO\b|\bFIXME\b|\bHACK\b/.test(content)) {
-        findings.push(this.finding(currentFile, "suggestion", "Address TODO/FIXME/HACK comment before merging.", "no-todo"));
+        findings.push(this.finding(currentFile, "suggestion", "Address TODO/FIXME/HACK comment before merging.", "no-todo",
+          "Either implement the TODO, or remove the comment if the work is done. If it's a known limitation, file a GitHub issue and reference it instead."));
       }
 
       // Check for hardcoded secrets patterns
       if (/(?:password|secret|api_key|token)\s*[:=]\s*["'][^"']{8,}["']/i.test(content)) {
-        findings.push(this.finding(currentFile, "error", "Possible hardcoded secret detected — use environment variables.", "no-secrets"));
+        findings.push(this.finding(currentFile, "error", "Possible hardcoded secret detected — use environment variables.", "no-secrets",
+          "Move this secret to an environment variable. Use process.env.SECRET_NAME and add the variable to .env.example (with a placeholder value, never the real secret)."));
       }
     }
 
     return findings;
   }
 
-  private finding(file: string, severity: ReviewSeverity, message: string, rule: string): ReviewFinding {
-    return { file, line: null, severity, message, rule };
+  private finding(file: string, severity: ReviewSeverity, message: string, rule: string, remediation?: string): ReviewFinding {
+    return { file, line: null, severity, message, rule, remediation: remediation ?? null };
   }
 }

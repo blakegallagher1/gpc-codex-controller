@@ -1454,6 +1454,45 @@ export class Controller extends EventEmitter {
     } catch {
       // Non-critical: workspace may be read-only in certain sandbox modes.
     }
+
+    // Deploy per-domain agent docs (hierarchical AGENTS.md pattern)
+    await this.deployAgentDocs(workspacePath);
+  }
+
+  /**
+   * Deploy per-domain doc files from templates/agent-docs/ into the workspace's
+   * docs/ directory. This implements the hierarchical AGENTS.md pattern where
+   * AGENTS.md is the table of contents and docs/ is the system of record.
+   */
+  private async deployAgentDocs(workspacePath: string): Promise<void> {
+    const agentDocsDir = resolve(this.controllerRoot, "templates", "agent-docs");
+
+    try {
+      await stat(agentDocsDir);
+    } catch {
+      return; // No agent-docs directory
+    }
+
+    const { readdir: listDir } = await import("node:fs/promises");
+    const docsDir = resolve(workspacePath, "docs");
+
+    try {
+      await mkdir(docsDir, { recursive: true });
+      const entries = await listDir(agentDocsDir);
+
+      for (const entry of entries) {
+        if (!entry.endsWith(".md")) continue;
+        const src = resolve(agentDocsDir, entry);
+        const dest = resolve(docsDir, entry);
+        try {
+          await copyFile(src, dest);
+        } catch {
+          // Non-critical per file
+        }
+      }
+    } catch {
+      // Non-critical: workspace may be read-only
+    }
   }
 
   // --- Compaction (token-aware) ---

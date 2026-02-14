@@ -43,11 +43,20 @@ export class ArchitectureValidator {
         if (currentFile.includes("/infrastructure/") || currentFile.includes("/infra/")) {
           const importMatch = /from\s+["'].*\/(domain|core|entities)\//i.exec(line);
           if (importMatch) {
+            const targetLayer = importMatch[1];
             violations.push({
               type: "dependency-direction",
               source: currentFile,
               target: importMatch[0],
               message: `Infrastructure layer importing from domain/core layer: ${line.slice(1).trim().slice(0, 100)}`,
+              remediation: [
+                `The infrastructure layer must not import from the ${targetLayer} layer directly.`,
+                `Fix: Invert the dependency using an interface/port pattern.`,
+                `  1. Define an interface in the ${targetLayer} layer (e.g., packages/<pkg>/src/${targetLayer}/ports/<Name>Port.ts).`,
+                `  2. Implement that interface in the infrastructure layer.`,
+                `  3. Import only the interface type (using 'import type') if needed.`,
+                `Allowed dependency direction: domain/core → (nothing) | infrastructure → domain interfaces (type-only) | api → domain`,
+              ].join("\n"),
             });
           }
         }
@@ -61,6 +70,15 @@ export class ArchitectureValidator {
               source: currentFile,
               target: importMatch[0],
               message: `API layer importing directly from infrastructure: ${line.slice(1).trim().slice(0, 100)}`,
+              remediation: [
+                `The API/routes layer must not import directly from infrastructure/database.`,
+                `Fix: Import from the domain layer's service or use-case instead.`,
+                `  1. Create or use an existing service in the domain layer.`,
+                `  2. The service should inject the repository via constructor (dependency injection).`,
+                `  3. Import the service in the API layer, not the repository.`,
+                `Example: Change 'import { UserRepo } from "../infrastructure/database/..."'`,
+                `  To: 'import { UserService } from "../domain/services/userService"'`,
+              ].join("\n"),
             });
           }
         }
@@ -115,6 +133,12 @@ export class ArchitectureValidator {
             source: pkg,
             target: "test/production mix",
             message: `Package ${pkg}: test changes mixed with production code changes`,
+            remediation: [
+              `Separate test file modifications from production source changes.`,
+              `This helps ensure test-only PRs don't accidentally modify production behavior.`,
+              `Fix: If both changes are intentional, that's fine — this is a warning.`,
+              `If the production file change is unintentional, revert it with: git checkout HEAD -- <file>`,
+            ].join("\n"),
           });
         }
       }
@@ -166,6 +190,15 @@ export class ArchitectureValidator {
                 source: fileA,
                 target: fileB,
                 message: `Potential circular import: ${fileA} → ${fileB} → ${fileA}`,
+                remediation: [
+                  `Break the circular dependency between ${fileA} and ${fileB}.`,
+                  `Common strategies:`,
+                  `  1. Extract shared types into a separate file that both can import.`,
+                  `  2. Use dependency injection: pass the dependency as a constructor parameter.`,
+                  `  3. Use an event emitter or callback pattern instead of direct imports.`,
+                  `  4. Move the shared logic into a third module that both files import.`,
+                  `Identify which direction is the "natural" dependency and restructure the other side.`,
+                ].join("\n"),
               });
             }
           }
