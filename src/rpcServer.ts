@@ -1,5 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Controller } from "./controller.js";
 import { createMcpHandler, type JobRecord } from "./mcpServer.js";
@@ -760,9 +761,12 @@ export async function startRpcServer(options: RpcServerOptions): Promise<{ close
 
   // OAuth 2.1 provider for ChatGPT MCP connector integration.
   // Falls back to a localhost issuer if no external URL is configured.
+  // State is persisted to disk so service restarts don't break ChatGPT's connection.
   const oauthIssuer = options.externalBaseUrl?.replace(/\/+$/, "")
     || `http://${options.bindHost}:${options.port}`;
-  const oauth = new OAuthProvider(oauthIssuer);
+  const cwd = process.env.CONTROLLER_WORKSPACE || process.cwd();
+  const oauthStateFile = resolve(cwd, ".gpc-codex-controller", "oauth-state.json");
+  const oauth = new OAuthProvider(oauthIssuer, oauthStateFile);
 
   const startJob = (method: string, fn: () => Promise<JsonValue>): JobRecord => {
     const job: JobRecord = {

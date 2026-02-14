@@ -11,10 +11,12 @@
  *   - Authorization Code + PKCE (RFC 7636)
  *   - Token Exchange
  *
- * Everything is in-memory — no persistence needed since ChatGPT
- * re-registers on each reconnect.
+ * State is persisted to disk so that service restarts don't wipe
+ * registered clients and tokens — ChatGPT won't need to re-register.
  */
 import crypto from "node:crypto";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 /* ---------- Types ---------- */
 
@@ -45,6 +47,13 @@ interface IssuedToken {
   expiresAt: number;
 }
 
+/* ---------- Persisted State ---------- */
+
+interface PersistedState {
+  clients: Array<[string, RegisteredClient]>;
+  tokens: Array<[string, IssuedToken]>;
+}
+
 /* ---------- Provider ---------- */
 
 export class OAuthProvider {
@@ -55,10 +64,54 @@ export class OAuthProvider {
   private readonly issuer: string;
   private readonly tokenLifetimeMs = 24 * 3600 * 1000; // 24 hours
   private readonly codeLifetimeMs = 600 * 1000; // 10 minutes
+  private readonly stateFilePath: string | undefined;
 
-  constructor(issuer: string) {
+  constructor(issuer: string, stateFilePath?: string) {
     // Ensure no trailing slash
     this.issuer = issuer.replace(/\/+$/, "");
+    this.stateFilePath = stateFilePath;
+    this.loadState();
+  }
+
+  /* ---- Persistence ---- */
+
+  private loadState(): void {
+    if (!this.stateFilePath) return;
+    try {
+      const raw = readFileSync(this.stateFilePath, "utf8");
+      const state = JSON.parse(raw) as PersistedState;
+      const now = Date.now();
+      // Restore clients (skip expired — older than 30 days)
+      const thirtyDays = 30 * 24 * 3600 * 1000;
+      for (const [key, client] of state.clients) {
+        if (client.registeredAt + thirtyDays > now) {
+          this.clients.set(key, client);
+        }
+      }
+      // Restore tokens (skip expired)
+      for (const [key, token] of state.tokens) {
+        if (token.expiresAt > now) {
+          this.tokens.set(key, token);
+        }
+      }
+      process.stderr.write(`[oauth] Loaded ${this.clients.size} clients, ${this.tokens.size} tokens from disk\n`);
+    } catch {
+      // File doesn't exist or is corrupt — start fresh
+    }
+  }
+
+  private saveState(): void {
+    if (!this.stateFilePath) return;
+    try {
+      const state: PersistedState = {
+        clients: Array.from(this.clients.entries()),
+        tokens: Array.from(this.tokens.entries()),
+      };
+      mkdirSync(dirname(this.stateFilePath), { recursive: true });
+      writeFileSync(this.stateFilePath, JSON.stringify(state), "utf8");
+    } catch (err) {
+      process.stderr.write(`[oauth] Failed to save state: ${err}\n`);
+    }
   }
 
   /* ---- Discovery Endpoints ---- */
@@ -109,6 +162,7 @@ export class OAuthProvider {
     };
 
     this.clients.set(clientId, client);
+    this.saveState();
 
     return {
       client_id: clientId,
@@ -241,6 +295,7 @@ export class OAuthProvider {
       resource: authCode.resource,
       expiresAt: Date.now() + this.tokenLifetimeMs,
     });
+    this.saveState();
 
     return {
       token: {
@@ -260,6 +315,7 @@ export class OAuthProvider {
     if (!issued) return false;
     if (issued.expiresAt < Date.now()) {
       this.tokens.delete(token);
+      this.saveState();
       return false;
     }
     return true;
