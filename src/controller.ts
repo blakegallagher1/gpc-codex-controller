@@ -395,14 +395,17 @@ export class Controller extends EventEmitter {
 
     const threadId = await this.createAndPersistNewThread(this.workspacePath);
     const analysisPrompt = [
-      "Task: analyze the gpc-cres monorepo and produce a written report. This is a READ-ONLY analysis — do not modify source code, do not run pnpm verify, do not commit changes.",
+      "Task: analyze the gpc-cres monorepo and produce a written report.",
+      "",
+      "You MUST read source files to complete this analysis. You have full permission to read ANY file in this workspace — .ts, .prisma, .json, .md, .yaml, .env.example, and all other file types. Use cat, file reading tools, or any available method to read files.",
       "",
       "Instructions:",
-      "1. Read the requested files carefully and thoroughly.",
-      "2. Write your analysis to the specified _artifacts/ file.",
+      "1. READ the requested files carefully and thoroughly. You are expected and required to read files.",
+      "2. WRITE your analysis to the specified _artifacts/ file.",
       "3. Do NOT run pnpm install, pnpm verify, pnpm build, or any build/test commands.",
-      "4. Do NOT modify any source files or create commits.",
-      "5. Focus entirely on analysis, findings, and recommendations.",
+      "4. Do NOT modify any source files (.ts, .prisma, .json, etc.) or create commits.",
+      "5. The ONLY file you should create or write to is the _artifacts/ output file.",
+      "6. Focus entirely on analysis, findings, and recommendations based on what you read.",
       "",
       "Analysis request:",
       prompt.trim(),
